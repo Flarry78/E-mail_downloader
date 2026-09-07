@@ -1,0 +1,22 @@
+# DEVLOG
+
+## 2026-09-05
+
+- Erste Gedanken und Brainstorming was erreicht werden soll und mögliche Probleme
+
+
+## 2026-09-06
+
+- Recherche zu bereits vorhandenen E-Mail Programmen die genau das erfüllen was man braucht
+- Verglichen, Preise, Funktionen, Einfachheit
+- Liste mit Alternativen erstellt
+
+
+## 2026-09-07
+
+- Angefangen mit Hilfe von Ki die mir den Großteil des Codes gibt ein Script zu erstellen
+- Passe es jetzt nach und nach an
+- E-Mails ab einem bestimmten Datum downloaden
+- Jede E-Mail die rein kommt kriegt eine einzigartige ID zugewiesen
+- IDs werden in einer Liste separat vom Script gespeichert.
+- Delays eingefügt damit es robuster wird und nicht evtl geblockt wird bei Abfragen
