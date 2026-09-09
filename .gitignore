@@ -2,3 +2,6 @@
 fortschritt.json
 downloader.log*
 rules.db
+_pycache_
+build
+dist
