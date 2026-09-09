@@ -39,3 +39,6 @@
 - es wird eine kleine meta datei erstellt um E-Mails neu zu sortieren wenn nachträglich der Zielort festgelegt wird
 - den betreff aud der SQLLite Bank entfernt
 - Das script nach dem downloaden und sortieren der E-Mails noch einmal den "unsorted" Ordner und verschiebt diese wenn möglich
+- FastAPI und HTML benutzt um ein 2tes Script zu erstellen und eine Grafische Oberfläche damit man einfacher die E-Mails zu Firmen hinzufügen kann
+- Eine exe aus derm 2ten Script erstell damit sich die Html Seite als Anwendung öffnet
+
