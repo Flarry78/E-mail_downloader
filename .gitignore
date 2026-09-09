@@ -1,3 +1,4 @@
 .env
 fortschritt.json
 downloader.log*
+rules.db

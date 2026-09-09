@@ -47,7 +47,7 @@ logging.getLogger().addHandler(console_handler)
 DB_PFAD = os.path.join(SKRIPT_ORDNER, "rules.db")
 
 def init_db():
-    """ Erstellt die Tabelle. firma_ordner ist optional (NULL erlaubt). """
+    """ Erstellt die Zuordnungstabelle (1 Eintrag pro Absender-Kombination). """
     conn = sqlite3.connect(DB_PFAD)
     cursor = conn.cursor()
     cursor.execute('''
@@ -55,7 +55,6 @@ def init_db():
             kennnummer INTEGER PRIMARY KEY AUTOINCREMENT,
             email_adresse TEXT NOT NULL,
             absender_name TEXT NOT NULL,
-            betreff TEXT,
             firma_ordner TEXT,
             UNIQUE(email_adresse, absender_name)
         )
@@ -63,10 +62,10 @@ def init_db():
     conn.commit()
     conn.close()
 
-def erfasse_oder_pruefe_email(email_adresse, absender_name, betreff):
+def erfasse_oder_pruefe_email(email_adresse, absender_name):
     """
-    Trägt die Mail-Daten in SQLite ein, falls noch nicht vorhanden.
-    Gibt den zugewiesenen firma_ordner zurück (falls der Chef ihn schon gesetzt hat).
+    Prüft, ob für den Absender bereits eine Zuordnung existiert.
+    Trägt neu gesehene Absender einmalig ein.
     """
     conn = sqlite3.connect(DB_PFAD)
     cursor = conn.cursor()
@@ -74,7 +73,6 @@ def erfasse_oder_pruefe_email(email_adresse, absender_name, betreff):
     email_clean = email_adresse.lower().strip()
     name_clean = absender_name.strip()
 
-    # 1. Prüfen, ob für diese Kombi bereits ein Firmenordner existiert
     cursor.execute('''
         SELECT firma_ordner FROM regeln 
         WHERE email_adresse = ? AND absender_name = ?
@@ -83,18 +81,66 @@ def erfasse_oder_pruefe_email(email_adresse, absender_name, betreff):
     
     firma_ordner = ergebnis[0] if ergebnis else None
 
-    # 2. In DB eintragen (Falls neu -> firma_ordner bleibt NULL / None)
     cursor.execute('''
-        INSERT INTO regeln (email_adresse, absender_name, betreff, firma_ordner)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(email_adresse, absender_name) 
-        DO UPDATE SET betreff = excluded.betreff
-    ''', (email_clean, name_clean, betreff, firma_ordner))
+        INSERT INTO regeln (email_adresse, absender_name, firma_ordner)
+        VALUES (?, ?, NULL)
+        ON CONFLICT(email_adresse, absender_name) DO NOTHING
+    ''', (email_clean, name_clean))
     
     conn.commit()
     conn.close()
     
     return firma_ordner
+
+def sortiere_unsorted_nach(ziel_ordner_pfad, db_pfad):
+    """
+    Durchsucht den unsorted/-Ordner nach .meta.json-Dateien und prüft,
+    ob in der DB mittlerweile ein Firmenordner zugewiesen wurde.
+    """
+    unsorted_pfad = os.path.join(ziel_ordner_pfad, "unsorted")
+    if not os.path.exists(unsorted_pfad):
+        return
+
+    conn = sqlite3.connect(db_pfad)
+    cursor = conn.cursor()
+
+    verarbeitete_ordner = 0
+    for ordner_name in os.listdir(unsorted_pfad):
+        ordner_pfad = os.path.join(unsorted_pfad, ordner_name)
+        meta_datei = os.path.join(ordner_pfad, ".meta.json")
+
+        if os.path.isdir(ordner_pfad) and os.path.exists(meta_datei):
+            try:
+                with open(meta_datei, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+
+                email_clean = meta.get("email_adresse", "").lower().strip()
+                name_clean = meta.get("absender_name", "").strip()
+
+                cursor.execute('''
+                    SELECT firma_ordner FROM regeln 
+                    WHERE email_adresse = ? AND absender_name = ? 
+                      AND firma_ordner IS NOT NULL AND firma_ordner != ''
+                ''', (email_clean, name_clean))
+                
+                ergebnis = cursor.fetchone()
+
+                if ergebnis:
+                    ziel_firma = ergebnis[0]
+                    firmen_ordner_pfad = os.path.join(ziel_ordner_pfad, ziel_firma)
+                    os.makedirs(firmen_ordner_pfad, exist_ok=True)
+
+                    finaler_pfad = os.path.join(firmen_ordner_pfad, ordner_name)
+                    shutil.move(ordner_pfad, finaler_pfad)
+                    logging.info(f"Nachträglich aus unsorted/ einsortiert nach '{ziel_firma}': {ordner_name}")
+                    verarbeitete_ordner += 1
+
+            except Exception as e:
+                logging.error(f"Fehler beim Re-Sortieren von {ordner_name}: {e}")
+
+    conn.close()
+    if verarbeitete_ordner > 0:
+        logging.info(f"Nachtrags-Sortierung abgeschlossen: {verarbeitete_ordner} Ordner verschoben.")
 
 init_db()
 
@@ -143,7 +189,7 @@ if not all([IMAP_SERVER, EMAIL_KONTO, PASSWORT]):
 
 os.makedirs(UNSORTED_ORDNER, exist_ok=True)
 
-# --- 4. Schlanke Fortschritts-Datei laden (Nur Hashes/IDs) ---
+# --- 4. Schlanke Fortschritts-Datei laden ---
 verarbeitete_hashes = {}
 if os.path.exists(FORTSCHRITT_DATEI):
     try:
@@ -191,129 +237,138 @@ try:
 
     if not mail_ids_set:
         logging.info("Keine relevanten E-Mails im Postfach gefunden.")
-        mail.logout()
-        sys.exit(0)
+    else:
+        mail_ids = sorted(list(mail_ids_set), key=lambda x: int(x))
+        logging.info(f"{len(mail_ids)} E-Mail(s) gefunden. Starte Bulk-Check...")
 
-    mail_ids = sorted(list(mail_ids_set), key=lambda x: int(x))
-    logging.info(f"{len(mail_ids)} E-Mail(s) gefunden. Starte Bulk-Check...")
+        all_ids_str = b",".join(mail_ids).decode()
+        status, header_data = mail.fetch(all_ids_str, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
 
-    all_ids_str = b",".join(mail_ids).decode()
-    status, header_data = mail.fetch(all_ids_str, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+        neue_mail_ids = []
+        
+        for response_part in header_data:
+            if isinstance(response_part, tuple):
+                raw_headers = response_part[1].decode("utf-8", errors="ignore")
+                m_id = response_part[0].split()[0]
 
-    neue_mail_ids = []
-    
-    for response_part in header_data:
-        if isinstance(response_part, tuple):
-            raw_headers = response_part[1].decode("utf-8", errors="ignore")
-            m_id = response_part[0].split()[0]
+                msg_id_line = [line for line in raw_headers.split("\r\n") if line.lower().startswith("message-id:")]
+                if msg_id_line:
+                    raw_msg_id = msg_id_line[0].split(":", 1)[1].strip()
+                else:
+                    raw_msg_id = f"fallback_{m_id.decode()}"
 
-            msg_id_line = [line for line in raw_headers.split("\r\n") if line.lower().startswith("message-id:")]
-            if msg_id_line:
-                raw_msg_id = msg_id_line[0].split(":", 1)[1].strip()
-            else:
-                raw_msg_id = f"fallback_{m_id.decode()}"
+                hex_hash = hashlib.sha256(raw_msg_id.encode("utf-8")).hexdigest()[:12]
 
-            hex_hash = hashlib.sha256(raw_msg_id.encode("utf-8")).hexdigest()[:12]
+                if hex_hash not in verarbeitete_hashes:
+                    neue_mail_ids.append((m_id, hex_hash, raw_msg_id))
 
-            # Nur prüfen, ob Hash bereits bekannt ist
-            if hex_hash not in verarbeitete_hashes:
-                neue_mail_ids.append((m_id, hex_hash, raw_msg_id))
+        logging.info(f"Prüfung fertig! {len(neue_mail_ids)} E-Mail(s) sind neu und werden jetzt heruntergeladen.")
 
-    logging.info(f"Prüfung fertig! {len(neue_mail_ids)} E-Mail(s) sind neu und werden jetzt heruntergeladen.")
+        verarbeitete_in_diesem_lauf = 0
 
-    verarbeitete_in_diesem_lauf = 0
+        for m_id, hex_hash, raw_msg_id in neue_mail_ids:
+            if MAX_MAILS > 0 and verarbeitete_in_diesem_lauf >= MAX_MAILS:
+                logging.info(f"Maximales Limit von {MAX_MAILS} Mails pro Durchlauf erreicht.")
+                break
 
-    for m_id, hex_hash, raw_msg_id in neue_mail_ids:
-        if MAX_MAILS > 0 and verarbeitete_in_diesem_lauf >= MAX_MAILS:
-            logging.info(f"Maximales Limit von {MAX_MAILS} Mails pro Durchlauf erreicht.")
-            break
+            try:
+                status, msg_data = mail.fetch(m_id, "(BODY.PEEK[])")
 
-        try:
-            status, msg_data = mail.fetch(m_id, "(BODY.PEEK[])")
+                for response_part in msg_data:
+                    if isinstance(response_part, tuple):
+                        raw_bytes = response_part[1]
+                        msg = email.message_from_bytes(raw_bytes, policy=policy.default)
 
-            for response_part in msg_data:
-                if isinstance(response_part, tuple):
-                    raw_bytes = response_part[1]
-                    msg = email.message_from_bytes(raw_bytes, policy=policy.default)
-
-                    raw_from = decode_mime_header(msg.get("From", ""))
-                    display_name, email_adresse = parseaddr(raw_from)
-                    
-                    subject_raw = msg.get("Subject", "Kein_Betreff")
-                    subject = decode_mime_header(subject_raw)
-                    subject_clean = clean_filename(subject)[:50]
-
-                    # --- SQLite Update & Check ---
-                    # Speichert die Mail-Daten direkt in SQLite & gibt Ordner zurück (falls bekannt)
-                    ziel_firma = erfasse_oder_pruefe_email(email_adresse, display_name, subject)
-
-                    # Erstmal in unsorted anlegen
-                    ordner_name = f"{subject_clean}_{hex_hash}"
-                    temp_ordner_pfad = os.path.join(UNSORTED_ORDNER, ordner_name)
-                    os.makedirs(temp_ordner_pfad, exist_ok=True)
-
-                    # A) Anhänge
-                    anzahl_anhaenge = 0
-                    for part in msg.walk():
-                        if part.get_content_disposition() != "attachment":
-                            continue
-
-                        filename = part.get_filename()
-                        if filename:
-                            filename = clean_filename(decode_mime_header(filename))
-                            filepath = os.path.join(temp_ordner_pfad, filename)
-
-                            payload = part.get_payload(decode=True)
-                            if payload:
-                                with open(filepath, "wb") as f:
-                                    f.write(payload)
-                                anzahl_anhaenge += 1
-
-                    # B) E-Mail-Text
-                    txt_pfad = os.path.join(temp_ordner_pfad, "E-Mail_Text.txt")
-                    with open(txt_pfad, "w", encoding="utf-8") as f:
-                        f.write(f"Von: {raw_from}\n")
-                        f.write(f"An: {msg.get('To')}\n")
-                        f.write(f"Datum: {msg.get('Date')}\n")
-                        f.write(f"Betreff: {subject}\n")
-                        f.write("="*50 + "\n\n")
-
-                        body = msg.get_body(preferencelist=('plain', 'html'))
-                        if body:
-                            f.write(body.get_content())
-
-                    # C) EML Backup
-                    eml_pfad = os.path.join(temp_ordner_pfad, "Mail_Backup.eml")
-                    with open(eml_pfad, "wb") as f:
-                        f.write(raw_bytes)
-
-                    # D) Sortierung anwenden (falls in SQLite bereits zugewiesen)
-                    if ziel_firma:
-                        firmen_ordner_pfad = os.path.join(ZIEL_ORDNER, ziel_firma)
-                        os.makedirs(firmen_ordner_pfad, exist_ok=True)
+                        raw_from = decode_mime_header(msg.get("From", ""))
+                        display_name, email_adresse = parseaddr(raw_from)
                         
-                        finaler_pfad = os.path.join(firmen_ordner_pfad, ordner_name)
-                        shutil.move(temp_ordner_pfad, finaler_pfad)
+                        subject_raw = msg.get("Subject", "Kein_Betreff")
+                        subject = decode_mime_header(subject_raw)
+
+                        # SQLite Check/Insert
+                        ziel_firma = erfasse_oder_pruefe_email(email_adresse, display_name)
+
+                        absender_clean = clean_filename(display_name if display_name else email_adresse)[:50]
+                        ordner_name = f"{absender_clean}_{hex_hash}"
                         
-                        logging.info(f"[{verarbeitete_in_diesem_lauf + 1}] AUTO-SORTIERT zu '{ziel_firma}': {ordner_name}")
-                    else:
-                        logging.info(f"[{verarbeitete_in_diesem_lauf + 1}] Gespeichert in unsorted/: {ordner_name}")
+                        temp_ordner_pfad = os.path.join(UNSORTED_ORDNER, ordner_name)
+                        os.makedirs(temp_ordner_pfad, exist_ok=True)
 
-                    verarbeitete_in_diesem_lauf += 1
+                        # A) Meta-Datei für nachträgliche Re-Sortierung via Web-UI anlegen
+                        meta_daten = {
+                            "email_adresse": email_adresse.lower().strip(),
+                            "absender_name": display_name.strip(),
+                            "hash": hex_hash
+                        }
+                        with open(os.path.join(temp_ordner_pfad, ".meta.json"), "w", encoding="utf-8") as f:
+                            json.dump(meta_daten, f, indent=4)
 
-                    # --- Nur schlichte Hash-Protokollierung in fortschritt.json ---
-                    verarbeitete_hashes[hex_hash] = time.strftime("%Y-%m-%d %H:%M:%S")
+                        # B) Anhänge
+                        anzahl_anhaenge = 0
+                        for part in msg.walk():
+                            if part.get_content_disposition() != "attachment":
+                                continue
 
-                    with open(FORTSCHRITT_DATEI, "w", encoding="utf-8") as f:
-                        json.dump(verarbeitete_hashes, f, indent=4)
+                            filename = part.get_filename()
+                            if filename:
+                                filename = clean_filename(decode_mime_header(filename))
+                                filepath = os.path.join(temp_ordner_pfad, filename)
 
-            time.sleep(PAUSE_SEKUNDEN)
+                                payload = part.get_payload(decode=True)
+                                if payload:
+                                    with open(filepath, "wb") as f:
+                                        f.write(payload)
+                                    anzahl_anhaenge += 1
 
-        except Exception as mail_err:
-            logging.error(f"Fehler bei E-Mail ID {m_id.decode()}: {mail_err}. Überspringe E-Mail.")
-            continue
+                        # C) E-Mail-Text
+                        txt_pfad = os.path.join(temp_ordner_pfad, "E-Mail_Text.txt")
+                        with open(txt_pfad, "w", encoding="utf-8") as f:
+                            f.write(f"Von: {raw_from}\n")
+                            f.write(f"An: {msg.get('To')}\n")
+                            f.write(f"Datum: {msg.get('Date')}\n")
+                            f.write(f"Betreff: {subject}\n")
+                            f.write("="*50 + "\n\n")
 
-    logging.info(f"Durchlauf fertig! Es wurden {verarbeitete_in_diesem_lauf} neue E-Mails verarbeitet.")
+                            body = msg.get_body(preferencelist=('plain', 'html'))
+                            if body:
+                                f.write(body.get_content())
+
+                        # D) EML Backup
+                        eml_pfad = os.path.join(temp_ordner_pfad, "Mail_Backup.eml")
+                        with open(eml_pfad, "wb") as f:
+                            f.write(raw_bytes)
+
+                        # E) Erst-Sortierung anwenden
+                        if ziel_firma:
+                            firmen_ordner_pfad = os.path.join(ZIEL_ORDNER, ziel_firma)
+                            os.makedirs(firmen_ordner_pfad, exist_ok=True)
+                            
+                            finaler_pfad = os.path.join(firmen_ordner_pfad, ordner_name)
+                            shutil.move(temp_ordner_pfad, finaler_pfad)
+                            
+                            logging.info(f"[{verarbeitete_in_diesem_lauf + 1}] AUTO-SORTIERT zu '{ziel_firma}': {ordner_name}")
+                        else:
+                            logging.info(f"[{verarbeitete_in_diesem_lauf + 1}] Gespeichert in unsorted/: {ordner_name}")
+
+                        verarbeitete_in_diesem_lauf += 1
+
+                        # Hash-Protokollierung
+                        verarbeitete_hashes[hex_hash] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+                        with open(FORTSCHRITT_DATEI, "w", encoding="utf-8") as f:
+                            json.dump(verarbeitete_hashes, f, indent=4)
+
+                time.sleep(PAUSE_SEKUNDEN)
+
+            except Exception as mail_err:
+                logging.error(f"Fehler bei E-Mail ID {m_id.decode()}: {mail_err}. Überspringe E-Mail.")
+                continue
+
+        logging.info(f"Downloads abgeschlossen! Es wurden {verarbeitete_in_diesem_lauf} neue E-Mails verarbeitet.")
+
+    # --- 7. Nachtrags-Sortierung für unzugewiesene Mails in unsorted/ ausführen ---
+    logging.info("Prüfe unsorted/ auf nachträglich zugewiesene Firmenordner...")
+    sortiere_unsorted_nach(ZIEL_ORDNER, DB_PFAD)
 
 except Exception as e:
     logging.error(f"Ein unerwarteter Fehler ist aufgetreten: {e}")

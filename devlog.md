@@ -36,3 +36,6 @@
 - Nur Anhänge und die eml werden genommen und nicht inline date , Bilder oder so 
 - es wird eine log datei erstellt die nach einer gewissen speichergröße überschrieben / gelöscht wird 
 - alles in eine exe verwandelt und getestet
+- es wird eine kleine meta datei erstellt um E-Mails neu zu sortieren wenn nachträglich der Zielort festgelegt wird
+- den betreff aud der SQLLite Bank entfernt
+- Das script nach dem downloaden und sortieren der E-Mails noch einmal den "unsorted" Ordner und verschiebt diese wenn möglich
