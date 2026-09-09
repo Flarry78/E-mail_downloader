@@ -28,3 +28,9 @@
 - alle E-Mails werden als Unterordner gespeicheert um die Mail übersichtlich und kompakt zu behalten
 - festgestellt das auch unerwünschte dateien mit gedownloadet werden. 
 - und Benennung muss anders
+
+
+## 2026-09-09
+
+- E-Mails werden überprüft ob diese noch "Ungelesen" sind oder max 5 Tage alt um sicher zu gehen das alle E-Mails erfasst werden ohne jedesmal alle E-Mails zu überprüfen
+- Nur Anhänge und die eml werden genommen und nicht inline date , Bilder oder so 
