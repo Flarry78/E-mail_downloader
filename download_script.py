@@ -8,8 +8,41 @@ import time
 import json
 import hashlib
 import re
+import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
+# --- 1. Pfade & Konfiguration laden (Kompatibel für .py und .exe) ---
+if getattr(sys, 'frozen', False):
+    # Skript läuft als kompilierte .exe
+    SKRIPT_ORDNER = os.path.dirname(sys.executable)
+else:
+    # Skript läuft als normale .py Datei
+    SKRIPT_ORDNER = os.path.dirname(os.path.abspath(__file__))
+
+load_dotenv(os.path.join(SKRIPT_ORDNER, ".env"))
+
+# --- 2. Professionelles Logging einrichten (Rotating File Handler) ---
+# Begrenzt das Log auf max. 1 MB pro Datei und behält maximal 2 Backup-Dateien.
+log_pfad = os.path.join(SKRIPT_ORDNER, 'downloader.log')
+log_handler = RotatingFileHandler(
+    log_pfad, 
+    maxBytes=1024 * 1024,  # 1 Megabyte
+    backupCount=2, 
+    encoding='utf-8'
+)
+
+logging.basicConfig(
+    handlers=[log_handler],
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# Auch Ausgaben an die Konsole schicken, falls es doch im Terminal ausgeführt wird
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logging.getLogger().addHandler(console_handler)
 
 
 def clean_filename(name):
@@ -35,18 +68,17 @@ def decode_mime_header(header_value):
     return text
 
 
-# 1. Pfade & Konfiguration laden
-SKRIPT_ORDNER = os.path.dirname(os.path.abspath(sys.argv[0]))
-load_dotenv(os.path.join(SKRIPT_ORDNER, ".env"))
-
+# Konfigurationen aus .env auslesen
 IMAP_SERVER = os.getenv("IMAP_SERVER")
 EMAIL_KONTO = os.getenv("EMAIL_KONTO")
 PASSWORT = os.getenv("PASSWORT")
 ZIEL_ORDNER = os.getenv("ZIEL_ORDNER", "Downloads")
 
-# Anzahl Tage, die rückwirkend auch GELESENE Mails geprüft werden sollen (Fallback für angeklickte Mails)
-TAGE_RUECKWIRKEND = int(os.getenv("TAGE_RUECKWIRKEND", "2"))
+# Falls ein relativer Pfad wie "Downloads" eingegeben wurde, im SKRIPT_ORDNER anlegen
+if not os.path.isabs(ZIEL_ORDNER):
+    ZIEL_ORDNER = os.path.join(SKRIPT_ORDNER, ZIEL_ORDNER)
 
+TAGE_RUECKWIRKEND = int(os.getenv("TAGE_RUECKWIRKEND", "2"))
 MAX_MAILS = int(os.getenv("MAX_MAILS", "0"))
 PAUSE_SEKUNDEN = float(os.getenv("PAUSE_SEKUNDEN", "1.0"))
 TIMEOUT_SEKUNDEN = int(os.getenv("TIMEOUT_SEKUNDEN", "60"))
@@ -54,70 +86,69 @@ TIMEOUT_SEKUNDEN = int(os.getenv("TIMEOUT_SEKUNDEN", "60"))
 FORTSCHRITT_DATEI = os.path.join(SKRIPT_ORDNER, "fortschritt.json")
 
 if not all([IMAP_SERVER, EMAIL_KONTO, PASSWORT]):
+    logging.critical("Fehler: Bitte prüfe die .env-Datei auf fehlende Zugangsdaten.")
     raise ValueError("Fehler: Bitte prüfe die .env-Datei auf fehlende Zugangsdaten.")
 
 if not os.path.exists(ZIEL_ORDNER):
     os.makedirs(ZIEL_ORDNER)
 
-# 2. Bisherigen Fortschritt laden
+# --- 3. Bisherigen Fortschritt laden ---
 verarbeitete_hashes = {}
 if os.path.exists(FORTSCHRITT_DATEI):
     try:
         with open(FORTSCHRITT_DATEI, "r", encoding="utf-8") as f:
             verarbeitete_hashes = json.load(f)
-    except Exception:
+    except Exception as e:
+        logging.warning(f"Konnte Fortschrittsdatei nicht lesen, erstelle neu: {e}")
         verarbeitete_hashes = {}
 
-# 3. IMAP-Verbindung mit Retry-Mechanismus aufbauen
+# --- 4. IMAP-Verbindung mit Retry-Mechanismus aufbauen ---
 MAX_VERBINDUNGS_VERSUCHE = 3
 WARTEZEITEN = [10, 30, 60]
 mail = None
 
 for versuch in range(1, MAX_VERBINDUNGS_VERSUCHE + 1):
     try:
-        print(f"Verbinde mit {IMAP_SERVER} für Konto {EMAIL_KONTO} (Versuch {versuch}/{MAX_VERBINDUNGS_VERSUCHE})...")
+        logging.info(f"Verbinde mit {IMAP_SERVER} für Konto {EMAIL_KONTO} (Versuch {versuch}/{MAX_VERBINDUNGS_VERSUCHE})...")
         mail = imaplib.IMAP4_SSL(IMAP_SERVER, timeout=TIMEOUT_SEKUNDEN)
         mail.login(EMAIL_KONTO, PASSWORT)
         mail.select("INBOX")
-        print("Erfolgreich verbunden!")
+        logging.info("Erfolgreich mit IMAP-Server verbunden!")
         break
     except Exception as e:
-        print(f"Verbindungsfehler bei Versuch {versuch}: {e}")
+        logging.error(f"Verbindungsfehler bei Versuch {versuch}: {e}")
         if versuch < MAX_VERBINDUNGS_VERSUCHE:
             pause = WARTEZEITEN[versuch - 1]
-            print(f"Warte {pause} Sekunden vor dem nächsten Versuch...")
+            logging.info(f"Warte {pause} Sekunden vor dem nächsten Versuch...")
             time.sleep(pause)
         else:
-            print("Keine Verbindung zum Mailserver möglich. Skript bricht ab.")
+            logging.critical("Keine Verbindung zum Mailserver möglich. Skript bricht ab.")
             sys.exit(1)
 
-# 4. Hauptverarbeitung mit erweiterter Kombi-Suche
+# --- 5. Hauptverarbeitung ---
 try:
-    # Datum für den Rückblick berechnen (z.B. Format für IMAP: "07-Sep-2026")
     datum_grenze = (datetime.now() - timedelta(days=TAGE_RUECKWIRKEND)).strftime("%d-%b-%Y")
-
     mail_ids_set = set()
 
-    # A) Suche 1: Alle UNGELESENEN Mails finden
+    # Suche 1: Ungelesene Mails
     status, res_unseen = mail.search(None, 'UNSEEN')
     if res_unseen[0]:
         mail_ids_set.update(res_unseen[0].split())
 
-    # B) Suche 2: Alle Mails der letzten X Tage finden (egal ob gelesen oder ungelesen)
+    # Suche 2: Mails der letzten X Tage
     status, res_recent = mail.search(None, f'SINCE "{datum_grenze}"')
     if res_recent[0]:
         mail_ids_set.update(res_recent[0].split())
 
     if not mail_ids_set:
-        print("Keine relevanten E-Mails im Postfach gefunden.")
+        logging.info("Keine relevanten E-Mails im Postfach gefunden.")
         mail.logout()
         sys.exit(0)
 
-    # IDs numerisch sortieren
     mail_ids = sorted(list(mail_ids_set), key=lambda x: int(x))
-    print(f"{len(mail_ids)} relevante E-Mail(s) (ungelesen oder aus den letzten {TAGE_RUECKWIRKEND} Tagen) gefunden. Prüfe schnell...")
+    logging.info(f"{len(mail_ids)} E-Mail(s) (ungelesen oder aus den letzten {TAGE_RUECKWIRKEND} Tagen) gefunden. Starte Bulk-Check...")
 
-    # BULK-FETCH: Alle Message-IDs in EINER Server-Anfrage abrufen
+    # Bulk-Fetch aller Message-IDs
     all_ids_str = b",".join(mail_ids).decode()
     status, header_data = mail.fetch(all_ids_str, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
 
@@ -126,7 +157,7 @@ try:
     for response_part in header_data:
         if isinstance(response_part, tuple):
             raw_headers = response_part[1].decode("utf-8", errors="ignore")
-            m_id = response_part[0].split()[0]  # Server Mail-ID
+            m_id = response_part[0].split()[0]
 
             msg_id_line = [line for line in raw_headers.split("\r\n") if line.lower().startswith("message-id:")]
             if msg_id_line:
@@ -139,14 +170,14 @@ try:
             if hex_hash not in verarbeitete_hashes:
                 neue_mail_ids.append((m_id, hex_hash, raw_msg_id))
 
-    print(f"Prüfung fertig! {len(neue_mail_ids)} E-Mail(s) sind noch nicht verarbeitet und werden jetzt heruntergeladen.")
+    logging.info(f"Prüfung fertig! {len(neue_mail_ids)} E-Mail(s) sind neu und werden jetzt heruntergeladen.")
 
     verarbeitete_in_diesem_lauf = 0
 
-    # 5. Nur noch die echten NEUEN Mails herunterladen
+    # Nur noch die echten neuen Mails herunterladen
     for m_id, hex_hash, raw_msg_id in neue_mail_ids:
         if MAX_MAILS > 0 and verarbeitete_in_diesem_lauf >= MAX_MAILS:
-            print(f"Maximales Limit von {MAX_MAILS} Mails pro Durchlauf erreicht.")
+            logging.info(f"Maximales Limit von {MAX_MAILS} Mails pro Durchlauf erreicht.")
             break
 
         try:
@@ -157,7 +188,6 @@ try:
                     raw_bytes = response_part[1]
                     msg = email.message_from_bytes(raw_bytes, policy=policy.default)
 
-                    # Ordnernamen aufbereiten
                     subject_raw = msg.get("Subject", "Kein_Betreff")
                     subject = decode_mime_header(subject_raw)
                     subject_clean = clean_filename(subject)[:50]
@@ -166,7 +196,7 @@ try:
                     email_ordner_pfad = os.path.join(ZIEL_ORDNER, ordner_name)
                     os.makedirs(email_ordner_pfad, exist_ok=True)
 
-                    # --- A) Nur ECHTE Anhänge extrahieren (Keine Inline-Bilder) ---
+                    # --- A) Nur ECHTE Anhänge extrahieren ---
                     anzahl_anhaenge = 0
                     for part in msg.walk():
                         if part.get_content_disposition() != "attachment":
@@ -202,9 +232,9 @@ try:
                         f.write(raw_bytes)
 
                     verarbeitete_in_diesem_lauf += 1
-                    print(f"[{verarbeitete_in_diesem_lauf}] Gespeichert in: {ordner_name} ({anzahl_anhaenge} Anhang/Anhänge)")
+                    logging.info(f"[{verarbeitete_in_diesem_lauf}] Gespeichert in: {ordner_name} ({anzahl_anhaenge} Anhang/Anhänge)")
 
-                    # Fortschritt sichern
+                    # Fortschritt protokollieren
                     verarbeitete_hashes[hex_hash] = {
                         "downloaded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "raw_msg_id": raw_msg_id,
@@ -218,18 +248,18 @@ try:
             time.sleep(PAUSE_SEKUNDEN)
 
         except Exception as mail_err:
-            print(f"Fehler bei E-Mail ID {m_id.decode()}: {mail_err}. Überspringe E-Mail.")
+            logging.error(f"Fehler bei E-Mail ID {m_id.decode()}: {mail_err}. Überspringe E-Mail.")
             continue
 
-    print(f"Fertig! Es wurden {verarbeitete_in_diesem_lauf} neue E-Mails verarbeitet.")
+    logging.info(f"Durchlauf fertig! Es wurden {verarbeitete_in_diesem_lauf} neue E-Mails verarbeitet.")
 
 except Exception as e:
-    print(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
+    logging.error(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
 
 finally:
     if mail:
         try:
             mail.logout()
-            print("IMAP-Verbindung sauber getrennt.")
+            logging.info("IMAP-Verbindung sauber getrennt.")
         except Exception:
             pass

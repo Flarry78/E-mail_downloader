@@ -34,3 +34,5 @@
 
 - E-Mails werden überprüft ob diese noch "Ungelesen" sind oder max 5 Tage alt um sicher zu gehen das alle E-Mails erfasst werden ohne jedesmal alle E-Mails zu überprüfen
 - Nur Anhänge und die eml werden genommen und nicht inline date , Bilder oder so 
+- es wird eine log datei erstellt die nach einer gewissen speichergröße überschrieben / gelöscht wird 
+- alles in eine exe verwandelt und getestet
