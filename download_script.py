@@ -2,33 +2,33 @@ import imaplib
 import email
 from email import policy
 from email.header import decode_header
+from email.utils import parseaddr
 import os
 import sys
 import time
 import json
 import hashlib
 import re
+import shutil
+import sqlite3
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# --- 1. Pfade & Konfiguration laden (Kompatibel für .py und .exe) ---
+# --- 1. Pfade & Konfiguration laden ---
 if getattr(sys, 'frozen', False):
-    # Skript läuft als kompilierte .exe
     SKRIPT_ORDNER = os.path.dirname(sys.executable)
 else:
-    # Skript läuft als normale .py Datei
     SKRIPT_ORDNER = os.path.dirname(os.path.abspath(__file__))
 
 load_dotenv(os.path.join(SKRIPT_ORDNER, ".env"))
 
-# --- 2. Professionelles Logging einrichten (Rotating File Handler) ---
-# Begrenzt das Log auf max. 1 MB pro Datei und behält maximal 2 Backup-Dateien.
+# --- 2. Logging einrichten ---
 log_pfad = os.path.join(SKRIPT_ORDNER, 'downloader.log')
 log_handler = RotatingFileHandler(
     log_pfad, 
-    maxBytes=1024 * 1024,  # 1 Megabyte
+    maxBytes=1024 * 1024, 
     backupCount=2, 
     encoding='utf-8'
 )
@@ -39,14 +39,67 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# Auch Ausgaben an die Konsole schicken, falls es doch im Terminal ausgeführt wird
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 logging.getLogger().addHandler(console_handler)
 
+# --- 3. SQLite Datenbank Integration ---
+DB_PFAD = os.path.join(SKRIPT_ORDNER, "rules.db")
+
+def init_db():
+    """ Erstellt die Tabelle. firma_ordner ist optional (NULL erlaubt). """
+    conn = sqlite3.connect(DB_PFAD)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS regeln (
+            kennnummer INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_adresse TEXT NOT NULL,
+            absender_name TEXT NOT NULL,
+            betreff TEXT,
+            firma_ordner TEXT,
+            UNIQUE(email_adresse, absender_name)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def erfasse_oder_pruefe_email(email_adresse, absender_name, betreff):
+    """
+    Trägt die Mail-Daten in SQLite ein, falls noch nicht vorhanden.
+    Gibt den zugewiesenen firma_ordner zurück (falls der Chef ihn schon gesetzt hat).
+    """
+    conn = sqlite3.connect(DB_PFAD)
+    cursor = conn.cursor()
+    
+    email_clean = email_adresse.lower().strip()
+    name_clean = absender_name.strip()
+
+    # 1. Prüfen, ob für diese Kombi bereits ein Firmenordner existiert
+    cursor.execute('''
+        SELECT firma_ordner FROM regeln 
+        WHERE email_adresse = ? AND absender_name = ?
+    ''', (email_clean, name_clean))
+    ergebnis = cursor.fetchone()
+    
+    firma_ordner = ergebnis[0] if ergebnis else None
+
+    # 2. In DB eintragen (Falls neu -> firma_ordner bleibt NULL / None)
+    cursor.execute('''
+        INSERT INTO regeln (email_adresse, absender_name, betreff, firma_ordner)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(email_adresse, absender_name) 
+        DO UPDATE SET betreff = excluded.betreff
+    ''', (email_clean, name_clean, betreff, firma_ordner))
+    
+    conn.commit()
+    conn.close()
+    
+    return firma_ordner
+
+init_db()
+
 
 def clean_filename(name):
-    """ Entfernt ungültige Zeichen für Ordner- und Dateinamen """
     if not name:
         return "Unbekannt"
     clean = re.sub(r'[\\/*?:"<>|\r\n]', "_", str(name))
@@ -55,7 +108,6 @@ def clean_filename(name):
 
 
 def decode_mime_header(header_value):
-    """ Dekodiert Sonderzeichen/Umlaute im Betreff oder Absender """
     if not header_value:
         return ""
     decoded_fragments = decode_header(header_value)
@@ -68,15 +120,15 @@ def decode_mime_header(header_value):
     return text
 
 
-# Konfigurationen aus .env auslesen
 IMAP_SERVER = os.getenv("IMAP_SERVER")
 EMAIL_KONTO = os.getenv("EMAIL_KONTO")
 PASSWORT = os.getenv("PASSWORT")
 ZIEL_ORDNER = os.getenv("ZIEL_ORDNER", "Downloads")
 
-# Falls ein relativer Pfad wie "Downloads" eingegeben wurde, im SKRIPT_ORDNER anlegen
 if not os.path.isabs(ZIEL_ORDNER):
     ZIEL_ORDNER = os.path.join(SKRIPT_ORDNER, ZIEL_ORDNER)
+
+UNSORTED_ORDNER = os.path.join(ZIEL_ORDNER, "unsorted")
 
 TAGE_RUECKWIRKEND = int(os.getenv("TAGE_RUECKWIRKEND", "2"))
 MAX_MAILS = int(os.getenv("MAX_MAILS", "0"))
@@ -89,10 +141,9 @@ if not all([IMAP_SERVER, EMAIL_KONTO, PASSWORT]):
     logging.critical("Fehler: Bitte prüfe die .env-Datei auf fehlende Zugangsdaten.")
     raise ValueError("Fehler: Bitte prüfe die .env-Datei auf fehlende Zugangsdaten.")
 
-if not os.path.exists(ZIEL_ORDNER):
-    os.makedirs(ZIEL_ORDNER)
+os.makedirs(UNSORTED_ORDNER, exist_ok=True)
 
-# --- 3. Bisherigen Fortschritt laden ---
+# --- 4. Schlanke Fortschritts-Datei laden (Nur Hashes/IDs) ---
 verarbeitete_hashes = {}
 if os.path.exists(FORTSCHRITT_DATEI):
     try:
@@ -102,7 +153,7 @@ if os.path.exists(FORTSCHRITT_DATEI):
         logging.warning(f"Konnte Fortschrittsdatei nicht lesen, erstelle neu: {e}")
         verarbeitete_hashes = {}
 
-# --- 4. IMAP-Verbindung mit Retry-Mechanismus aufbauen ---
+# --- 5. IMAP-Verbindung ---
 MAX_VERBINDUNGS_VERSUCHE = 3
 WARTEZEITEN = [10, 30, 60]
 mail = None
@@ -125,17 +176,15 @@ for versuch in range(1, MAX_VERBINDUNGS_VERSUCHE + 1):
             logging.critical("Keine Verbindung zum Mailserver möglich. Skript bricht ab.")
             sys.exit(1)
 
-# --- 5. Hauptverarbeitung ---
+# --- 6. Hauptverarbeitung ---
 try:
     datum_grenze = (datetime.now() - timedelta(days=TAGE_RUECKWIRKEND)).strftime("%d-%b-%Y")
     mail_ids_set = set()
 
-    # Suche 1: Ungelesene Mails
     status, res_unseen = mail.search(None, 'UNSEEN')
     if res_unseen[0]:
         mail_ids_set.update(res_unseen[0].split())
 
-    # Suche 2: Mails der letzten X Tage
     status, res_recent = mail.search(None, f'SINCE "{datum_grenze}"')
     if res_recent[0]:
         mail_ids_set.update(res_recent[0].split())
@@ -146,9 +195,8 @@ try:
         sys.exit(0)
 
     mail_ids = sorted(list(mail_ids_set), key=lambda x: int(x))
-    logging.info(f"{len(mail_ids)} E-Mail(s) (ungelesen oder aus den letzten {TAGE_RUECKWIRKEND} Tagen) gefunden. Starte Bulk-Check...")
+    logging.info(f"{len(mail_ids)} E-Mail(s) gefunden. Starte Bulk-Check...")
 
-    # Bulk-Fetch aller Message-IDs
     all_ids_str = b",".join(mail_ids).decode()
     status, header_data = mail.fetch(all_ids_str, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
 
@@ -167,6 +215,7 @@ try:
 
             hex_hash = hashlib.sha256(raw_msg_id.encode("utf-8")).hexdigest()[:12]
 
+            # Nur prüfen, ob Hash bereits bekannt ist
             if hex_hash not in verarbeitete_hashes:
                 neue_mail_ids.append((m_id, hex_hash, raw_msg_id))
 
@@ -174,7 +223,6 @@ try:
 
     verarbeitete_in_diesem_lauf = 0
 
-    # Nur noch die echten neuen Mails herunterladen
     for m_id, hex_hash, raw_msg_id in neue_mail_ids:
         if MAX_MAILS > 0 and verarbeitete_in_diesem_lauf >= MAX_MAILS:
             logging.info(f"Maximales Limit von {MAX_MAILS} Mails pro Durchlauf erreicht.")
@@ -188,15 +236,23 @@ try:
                     raw_bytes = response_part[1]
                     msg = email.message_from_bytes(raw_bytes, policy=policy.default)
 
+                    raw_from = decode_mime_header(msg.get("From", ""))
+                    display_name, email_adresse = parseaddr(raw_from)
+                    
                     subject_raw = msg.get("Subject", "Kein_Betreff")
                     subject = decode_mime_header(subject_raw)
                     subject_clean = clean_filename(subject)[:50]
 
-                    ordner_name = f"{subject_clean}_{hex_hash}"
-                    email_ordner_pfad = os.path.join(ZIEL_ORDNER, ordner_name)
-                    os.makedirs(email_ordner_pfad, exist_ok=True)
+                    # --- SQLite Update & Check ---
+                    # Speichert die Mail-Daten direkt in SQLite & gibt Ordner zurück (falls bekannt)
+                    ziel_firma = erfasse_oder_pruefe_email(email_adresse, display_name, subject)
 
-                    # --- A) Nur ECHTE Anhänge extrahieren ---
+                    # Erstmal in unsorted anlegen
+                    ordner_name = f"{subject_clean}_{hex_hash}"
+                    temp_ordner_pfad = os.path.join(UNSORTED_ORDNER, ordner_name)
+                    os.makedirs(temp_ordner_pfad, exist_ok=True)
+
+                    # A) Anhänge
                     anzahl_anhaenge = 0
                     for part in msg.walk():
                         if part.get_content_disposition() != "attachment":
@@ -205,7 +261,7 @@ try:
                         filename = part.get_filename()
                         if filename:
                             filename = clean_filename(decode_mime_header(filename))
-                            filepath = os.path.join(email_ordner_pfad, filename)
+                            filepath = os.path.join(temp_ordner_pfad, filename)
 
                             payload = part.get_payload(decode=True)
                             if payload:
@@ -213,10 +269,10 @@ try:
                                     f.write(payload)
                                 anzahl_anhaenge += 1
 
-                    # --- B) E-Mail-Text als TXT abspeichern ---
-                    txt_pfad = os.path.join(email_ordner_pfad, "E-Mail_Text.txt")
+                    # B) E-Mail-Text
+                    txt_pfad = os.path.join(temp_ordner_pfad, "E-Mail_Text.txt")
                     with open(txt_pfad, "w", encoding="utf-8") as f:
-                        f.write(f"Von: {msg.get('From')}\n")
+                        f.write(f"Von: {raw_from}\n")
                         f.write(f"An: {msg.get('To')}\n")
                         f.write(f"Datum: {msg.get('Date')}\n")
                         f.write(f"Betreff: {subject}\n")
@@ -226,21 +282,27 @@ try:
                         if body:
                             f.write(body.get_content())
 
-                    # --- C) E-Mail als EML sichern ---
-                    eml_pfad = os.path.join(email_ordner_pfad, "Mail_Backup.eml")
+                    # C) EML Backup
+                    eml_pfad = os.path.join(temp_ordner_pfad, "Mail_Backup.eml")
                     with open(eml_pfad, "wb") as f:
                         f.write(raw_bytes)
 
-                    verarbeitete_in_diesem_lauf += 1
-                    logging.info(f"[{verarbeitete_in_diesem_lauf}] Gespeichert in: {ordner_name} ({anzahl_anhaenge} Anhang/Anhänge)")
+                    # D) Sortierung anwenden (falls in SQLite bereits zugewiesen)
+                    if ziel_firma:
+                        firmen_ordner_pfad = os.path.join(ZIEL_ORDNER, ziel_firma)
+                        os.makedirs(firmen_ordner_pfad, exist_ok=True)
+                        
+                        finaler_pfad = os.path.join(firmen_ordner_pfad, ordner_name)
+                        shutil.move(temp_ordner_pfad, finaler_pfad)
+                        
+                        logging.info(f"[{verarbeitete_in_diesem_lauf + 1}] AUTO-SORTIERT zu '{ziel_firma}': {ordner_name}")
+                    else:
+                        logging.info(f"[{verarbeitete_in_diesem_lauf + 1}] Gespeichert in unsorted/: {ordner_name}")
 
-                    # Fortschritt protokollieren
-                    verarbeitete_hashes[hex_hash] = {
-                        "downloaded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "raw_msg_id": raw_msg_id,
-                        "folder": ordner_name,
-                        "attachments_count": anzahl_anhaenge
-                    }
+                    verarbeitete_in_diesem_lauf += 1
+
+                    # --- Nur schlichte Hash-Protokollierung in fortschritt.json ---
+                    verarbeitete_hashes[hex_hash] = time.strftime("%Y-%m-%d %H:%M:%S")
 
                     with open(FORTSCHRITT_DATEI, "w", encoding="utf-8") as f:
                         json.dump(verarbeitete_hashes, f, indent=4)
