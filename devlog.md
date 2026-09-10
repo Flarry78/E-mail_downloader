@@ -42,3 +42,9 @@
 - FastAPI und HTML benutzt um ein 2tes Script zu erstellen und eine Grafische Oberfläche damit man einfacher die E-Mails zu Firmen hinzufügen kann
 - Eine exe aus derm 2ten Script erstell damit sich die Html Seite als Anwendung öffnet
 
+
+## 2026-09-10
+
+- falls kein absender, wiurd die email als absender kopiert um vergleiche zu behalten und leere sql einträge zu verhindern
+- projekt ist ersma fertig
+
