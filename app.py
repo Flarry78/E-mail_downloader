@@ -88,26 +88,32 @@ def speichern(
 
     return RedirectResponse(url="/", status_code=303)
 
-
 # --- Hilfsfunktionen für den Exe-Start ---
 def start_fastapi():
     """ Startet den FastAPI-Server im Hintergrund. """
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
 
 
+# DIESER BLOCK MUSSTE WIEDER GANZ NACH LINKS RÜCKEN:
 if __name__ == "__main__":
-    # Server in einem separaten Thread starten
+    from dotenv import load_dotenv
+    
+    # .env aus dem Ausführungs-Ordner laden
+    env_path = os.path.join(EXECUTIVE_DIR, ".env")
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+
+    # FastAPI in einem eigenen Hintergrund-Thread starten
     server_thread = threading.Thread(target=start_fastapi, daemon=True)
     server_thread.start()
 
-    # Eigenes Anwendungsfenster öffnen
+    # GUI-Fenster erstellen und anzeigen
     webview.create_window(
         title="E-Mail Zuordnung Manager", 
         url="http://127.0.0.1:8000",
         width=1000,
         height=700
     )
-    webview.start()
     
-    # Sobald das Fenster geschlossen wird, beendet Python das komplette Skript
+    webview.start(gui='edgechromium')
     sys.exit(0)

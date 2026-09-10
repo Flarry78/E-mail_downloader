@@ -69,9 +69,9 @@ def erfasse_oder_pruefe_email(email_adresse, absender_name):
     """
     conn = sqlite3.connect(DB_PFAD)
     cursor = conn.cursor()
-    
+
     email_clean = email_adresse.lower().strip()
-    name_clean = absender_name.strip()
+    name_clean = absender_name.strip() if absender_name and absender_name.strip() else email_clean
 
     cursor.execute('''
         SELECT firma_ordner FROM regeln 
@@ -183,7 +183,7 @@ FORTSCHRITT_DATEI = os.path.join(SKRIPT_ORDNER, "fortschritt.json")
 
 
 # ==============================================================================
-# AB HIER NURE NOCH AUSFÜHREN, WENN SKRIPT DIREKT GESTARTET WIRD (NICHT BEI IMPORT)
+# AB HIER NUR NOCH AUSFÜHREN, WENN SKRIPT DIREKT GESTARTET WIRD (NICHT BEI IMPORT)
 # ==============================================================================
 if __name__ == "__main__":
     init_db()
@@ -286,14 +286,18 @@ if __name__ == "__main__":
 
                             raw_from = decode_mime_header(msg.get("From", ""))
                             display_name, email_adresse = parseaddr(raw_from)
-                            
+
+                            # --- NEU: Fallback falls Absender kein Display Name hat ---
+                            if not display_name or not display_name.strip():
+                                display_name = email_adresse
+
                             subject_raw = msg.get("Subject", "Kein_Betreff")
                             subject = decode_mime_header(subject_raw)
 
                             # SQLite Check/Insert
                             ziel_firma = erfasse_oder_pruefe_email(email_adresse, display_name)
 
-                            absender_clean = clean_filename(display_name if display_name else email_adresse)[:50]
+                            absender_clean = clean_filename(display_name)[:50]
                             ordner_name = f"{absender_clean}_{hex_hash}"
                             
                             temp_ordner_pfad = os.path.join(UNSORTED_ORDNER, ordner_name)
