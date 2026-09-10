@@ -3,112 +3,342 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Offene Absender zuordnen</title>
+    <title>E-Mail Zuordnung Manager</title>
     <style>
+        :root {
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text: #1e293b;
+            --border: #e2e8f0;
+            --accent: #0f172a;
+        }
+
         body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f6f9;
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
             margin: 0;
             padding: 20px;
         }
+
         .container {
-            max-width: 900px;
+            max-width: 800px;
             margin: 0 auto;
-            background: white;
-            padding: 20px 30px;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
-        h1 {
-            color: #333;
-            border-bottom: 2px solid #007bff;
-            padding-bottom: 10px;
+
+        /* Top Action Bar */
+        .action-card {
+            background: var(--card-bg);
+            padding: 18px 24px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            border: 1px solid var(--border);
+            margin-bottom: 20px;
         }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
+
+        .action-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 15px;
         }
-        th, td {
-            padding: 12px 15px;
-            border: 1px solid #ddd;
-            text-align: left;
+
+        .action-title h2 {
+            margin: 0;
+            font-size: 1.2rem;
+            color: var(--accent);
         }
-        th {
-            background-color: #007bff;
-            color: white;
+
+        .action-title p {
+            margin: 4px 0 0 0;
+            font-size: 0.85rem;
+            color: #64748b;
         }
-        tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-        input[type="text"] {
-            width: 80%;
-            padding: 8px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }
-        button {
-            padding: 8px 12px;
-            background-color: #28a745;
+
+        .btn-sync {
+            background-color: var(--primary);
             color: white;
             border: none;
-            border-radius: 4px;
+            padding: 10px 20px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            border-radius: 6px;
             cursor: pointer;
+            white-space: nowrap;
+            transition: background-color 0.2s;
         }
-        button:hover {
-            background-color: #218838;
+
+        .btn-sync:hover {
+            background-color: var(--primary-hover);
         }
-        .empty-message {
-            color: #28a745;
-            font-weight: bold;
-            font-size: 1.1em;
-            margin-top: 20px;
+
+        .btn-sync:disabled {
+            background-color: #94a3b8;
+            cursor: not-allowed;
+        }
+
+        /* Status Badge */
+        .status-badge {
+            display: none;
+            margin-top: 12px;
+            padding: 8px 12px;
+            background-color: #eff6ff;
+            border: 1px solid #bfdbfe;
+            color: #1e40af;
+            border-radius: 6px;
+            font-size: 0.88rem;
+            font-weight: 600;
+        }
+
+        /* Kompakte Live Console */
+        .console-box {
+            display: none;
+            background: #0f172a;
+            color: #38bdf8;
+            font-family: 'Courier New', Courier, monospace;
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 12px;
+            max-height: 150px; /* Kompakt gehalten */
+            overflow-y: auto;
+            font-size: 0.82rem;
+            line-height: 1.4;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+        }
+
+        .console-line {
+            margin-bottom: 2px;
+            word-break: break-all;
+        }
+
+        /* Zuordnungsliste */
+        .section-title {
+            font-size: 1.05rem;
+            margin: 0 0 12px 0;
+            color: #334155;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px 18px;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+        }
+
+        .card-header {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--accent);
+        }
+
+        .card-subheader {
+            color: #64748b;
+            font-size: 0.85rem;
+            margin-bottom: 12px;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .btn-save {
+            background-color: #10b981;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            font-weight: 600;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        .btn-save:hover {
+            background-color: #059669;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 30px;
+            background: var(--card-bg);
+            border-radius: 8px;
+            border: 1px dashed var(--border);
+            color: #64748b;
+            font-size: 0.95rem;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Offene Absender - Zuordnung</h1>
-        
-        <!-- Zentrale Liste für Auto-Complete Vorschläge -->
-        <datalist id="firmen_liste">
-            {% for firma in existierende_firmen %}
-                <option value="{{ firma }}">
-            {% endfor %}
-        </datalist>
 
+<div class="container">
+    
+    <!-- Aktionsbereich / Download Bar -->
+    <div class="action-card">
+        <div class="action-header">
+            <div class="action-title">
+                <h2>E-Mail Abruf</h2>
+                <p>Neue Mails abrufen und nach Regeln sortieren</p>
+            </div>
+            <button id="downloadBtn" class="btn-sync" onclick="startDownload()">
+                📩 Neue Mails abrufen
+            </button>
+        </div>
+
+        <!-- Hervorgehobener Status -->
+        <div id="statusBadge" class="status-badge"></div>
+
+        <!-- Kompakte Konsole -->
+        <div id="console" class="console-box"></div>
+    </div>
+
+    <!-- Zuordnungsbereich -->
+    <h3 class="section-title">Offene Absender-Zuordnungen</h3>
+
+    <div id="assignmentArea">
         {% if offene_absender %}
-            <p>Die folgenden Absender haben noch keinen zugewiesenen Firmenordner. Gib einen Namen ein oder wähle einen bestehenden aus den Vorschlägen.</p>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Absender Name</th>
-                        <th>E-Mail Adresse</th>
-                        <th>Ziel-Firmenordner</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for item in offene_absender %}
-                    <tr>
-                        <td>{{ item['absender_name'] }}</td>
-                        <td>{{ item['email_adresse'] }}</td>
-                        <td>
-                            <form action="/speichern" method="post" style="display: flex; gap: 8px;">
-                                <input type="hidden" name="kennnummer" value="{{ item['kennnummer'] }}">
-                                <!-- list="firmen_liste" aktiviert das Autocomplete-Dropdown -->
-                                <input type="text" name="firma_ordner" placeholder="z. B. Yahoo" list="firmen_liste" required autocomplete="off">
-                                <button type="submit">Speichern</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+            {% for eintrag in offene_absender %}
+                <div class="card">
+                    <div class="card-header">{{ eintrag.absender_name }}</div>
+                    <div class="card-subheader">&lt;{{ eintrag.email_adresse }}&gt;</div>
+                    
+                    <form action="/speichern" method="post" class="form-row">
+                        <input type="hidden" name="kennnummer" value="{{ eintrag.kennnummer }}">
+                        
+                        <input 
+                            type="text" 
+                            name="firma_ordner" 
+                            list="firmen-liste" 
+                            placeholder="Firmenordner eingeben oder wählen..." 
+                            required
+                            autocomplete="off"
+                        >
+                        
+                        <button type="submit" class="btn-save">Speichern</button>
+                    </form>
+                </div>
+            {% endfor %}
         {% else %}
-            <div class="empty-message">
-                🎉 Alle Absender sind aktuell zugewiesen! Es gibt keine offenen Aufgaben.
+            <div class="empty-state">
+                ✨ Alle Absender sind aktuell zugewiesen!
             </div>
         {% endif %}
     </div>
+
+    <!-- Datalist für Vorschläge -->
+    <datalist id="firmen-liste">
+        {% for firma in existierende_firmen %}
+            <option value="{{ firma }}"></option>
+        {% endfor %}
+    </datalist>
+
+</div>
+
+<script>
+    function startDownload() {
+        const btn = document.getElementById('downloadBtn');
+        const consoleBox = document.getElementById('console');
+        const statusBadge = document.getElementById('statusBadge');
+        
+        btn.disabled = true;
+        btn.innerHTML = "⏳ Prüfe Mails...";
+        
+        // Reset Sichtbarkeit & Konsole für neuen Lauf
+        statusBadge.style.display = 'none';
+        consoleBox.style.display = 'block';
+        consoleBox.innerHTML = '<div class="console-line">> Starte Verbindung...</div>';
+
+        const eventSource = new EventSource('/stream-download');
+
+        eventSource.onmessage = function(event) {
+            const data = event.data;
+
+            if (data === '[DONE]') {
+                eventSource.close();
+                btn.disabled = false;
+                btn.innerHTML = "📩 Neue Mails abrufen";
+                
+                // Konsole bleibt stehen! Wir ergänzen nur die Abschlusszeile
+                const doneLine = document.createElement('div');
+                doneLine.className = 'console-line';
+                doneLine.style.color = '#4ade80';
+                doneLine.style.fontWeight = 'bold';
+                doneLine.textContent = '> [FERTIG] Vorgang beendet.';
+                consoleBox.appendChild(doneLine);
+                consoleBox.scrollTop = consoleBox.scrollHeight;
+
+                // Aktualisiere die Formularliste im Hintergrund, ohne die Seite / Konsole neu zu laden
+                refreshAssignments();
+
+            } else {
+                // Text in Konsole ausgeben
+                const line = document.createElement('div');
+                line.className = 'console-line';
+                line.textContent = '> ' + data;
+                consoleBox.appendChild(line);
+                consoleBox.scrollTop = consoleBox.scrollHeight;
+
+                // Extrahiere Kennzahlen für die Info-Box (falls im Text vorhanden)
+                if (data.includes('E-Mails gefunden') || data.includes('sind neu')) {
+                    statusBadge.style.display = 'block';
+                    if (statusBadge.textContent) {
+                        statusBadge.textContent += ' | ' + data;
+                    } else {
+                        statusBadge.textContent = '📊 ' + data;
+                    }
+                }
+            }
+        };
+
+        eventSource.onerror = function() {
+            eventSource.close();
+            btn.disabled = false;
+            btn.innerHTML = "📩 Neue Mails abrufen";
+            
+            const errLine = document.createElement('div');
+            errLine.className = 'console-line';
+            errLine.style.color = '#f87171';
+            errLine.textContent = '> Fehler bei der Serververbindung.';
+            consoleBox.appendChild(errLine);
+        };
+    }
+
+    // Funktion lädt nur die Liste der unsortierten Absender neu
+    function refreshAssignments() {
+        fetch('/')
+            .then(response => response.text())
+            .then(html => {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const newArea = doc.getElementById('assignmentArea');
+                const newDatalist = doc.getElementById('firmen-liste');
+                
+                if (newArea) {
+                    document.getElementById('assignmentArea').innerHTML = newArea.innerHTML;
+                }
+                if (newDatalist) {
+                    document.getElementById('firmen-liste').innerHTML = newDatalist.innerHTML;
+                }
+            })
+            .catch(err => console.error("Fehler beim Aktualisieren der Liste:", err));
+    }
+</script>
+
 </body>
 </html>

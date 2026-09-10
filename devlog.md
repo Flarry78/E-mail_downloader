@@ -47,4 +47,5 @@
 
 - falls kein absender, wiurd die email als absender kopiert um vergleiche zu behalten und leere sql einträge zu verhindern
 - projekt ist ersma fertig
-
+- html überabeitet damit alles über die app.exe gesteuert werden kann
+- autostart mit anmeldung und zeitabstand idee verworfen
