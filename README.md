@@ -1,3 +1,9 @@
+## 💡 Vorweg-Info
+
+Dieses Projekt ist als kleiner Gefallen entstanden, um ein nerviges Alltagsproblem beim E-Mail-Sortieren zu lösen. 
+
+Ich habe dabei **stark auf KI-Unterstützung** gesetzt, um den Code schreiben zu lassen. Mein Hauptziel war ein Experiment aus Neugier: Ich wollte testen, wie schnell, verlässlich und robust man mit KI ein praxistaugliches Tool bauen kann, das im Alltag spürbar Arbeit abnimmt.
+
 # 📩 E-Mail Auto-Sorter & Attachment Manager
 
 Ein Desktop-Tool zur automatisierten Erfassung und Sortierung von E-Mail-Anhängen im `.eml`-Format. Das System nutzt eine **manuelle Erstkontrolle mit automatischer Weiterverarbeitung** für Klassifizierungsgenauigkeit bei maximaler Zeitersparnis.
@@ -20,3 +26,5 @@ Ein Desktop-Tool zur automatisierten Erfassung und Sortierung von E-Mail-Anhäng
 * **Dateityp-Erkennung & Filter:** Gezielter Download bestimmter Dateiendungen (z. B. nur `.pdf`, `.jpeg`) sowie Verwerfen unerwünschter Formate.
 * **White- & Blacklisting:** Einfache GUI-Verwaltung zum Blockieren oder Bevorzugen spezifischer Absenderadressen.
 * **Spam-Ordner-Durchsuchung:** Optionale Überprüfung des Spam-Ordners, um fälschlicherweise sortierte E-Mails von Whitelist-Absendern trotzdem zu erfassen.
+
+<img src="templates/showcase.png" alt="Screenshot" width="1080">

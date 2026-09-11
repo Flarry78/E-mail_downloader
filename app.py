@@ -179,11 +179,15 @@ if __name__ == "__main__":
     
     try:
         webview.start(gui='edgechromium')
-    except Exception as e1:
+    except Exception:
         try:
-            webview.start(gui='winforms')
-        except Exception as e2:
             webview.start(gui='mshtml')
+        except Exception:
+            # Fallback: Falls pywebview gar nicht geht, öffne den Standard-Browser
+            import webbrowser
+            webbrowser.open(f"http://127.0.0.1:{SERVER_PORT}")
+            while True:
+                time.sleep(1)
 
     sys.exit(0)
     
