@@ -49,3 +49,10 @@
 - projekt ist ersma fertig
 - html überabeitet damit alles über die app.exe gesteuert werden kann
 - autostart mit anmeldung und zeitabstand idee verworfen
+
+
+## 2026-09-11
+
+- fix für das gui beim starten der app
+- readme bearbeitet
+- datum als name für die ordner geaddet

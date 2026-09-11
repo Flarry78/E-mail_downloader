@@ -264,8 +264,19 @@ def starte_download_und_sortierung():
                             subject = decode_mime_header(msg.get("Subject", "Kein_Betreff"))
                             ziel_firma = erfasse_oder_pruefe_email(email_adresse, display_name)
 
+                            # --- NEU: Datum für den Ordnernamen bestimmen ---
+                            date_header = msg.get("Date")
+                            if date_header:
+                                try:
+                                    mail_dt = email.utils.parsedate_to_datetime(date_header)
+                                    datum_prefix = mail_dt.strftime("%Y-%m-%d")
+                                except Exception:
+                                    datum_prefix = datetime.now().strftime("%Y-%m-%d")
+                            else:
+                                datum_prefix = datetime.now().strftime("%Y-%m-%d")
+
                             absender_clean = clean_filename(display_name)[:50]
-                            ordner_name = f"{absender_clean}_{hex_hash}"
+                            ordner_name = f"{datum_prefix}_{absender_clean}_{hex_hash}"
                             temp_ordner_pfad = os.path.join(UNSORTED_ORDNER, ordner_name)
                             os.makedirs(temp_ordner_pfad, exist_ok=True)
 
