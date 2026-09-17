@@ -23,8 +23,8 @@ Ein Desktop-Tool zur automatisierten Erfassung und Sortierung von E-Mail-Anhäng
 
 ## 📝 Verbesserungspotenziale und geplante Änderungen
 
-**Erweiterung der Zuweisung (Firma + Auftrag):** Bisher wurde jede E-Mail nur starr einem festen Firmennamen zugeteilt. Geplant ist, dass jede E-Mail zusätzlich eine Auftragsnummer erhalten muss, da eine Firma mehrere verschiedene Aufträge haben kann.
-**Zentraler Postfach-Look (UI/UX im Outlook-Stil):** Die Weboberfläche bekommt ein zweigeteiltes Layout.
-**Lernende Datenbank (Zeitersparnis):** Bekannte Absender sollen automatisch wiedererkannt und die zugehörige Firma vorausgefüllt werden, um die Tipparbeit auf ein Minimum zu reduzieren.
-**Performance & Geschwindigkeit:** Das Tool soll extrem schnell und schlank laufen (auch auf schwächerer Hardware), damit das Abarbeiten und Verschieben/Umbenennen im Minutentakt flüssig von der Hand geht.
+* **Erweiterung der Zuweisung (Firma + Auftrag):** Bisher wurde jede E-Mail nur starr einem festen Firmennamen zugeteilt. Geplant ist, dass jede E-Mail zusätzlich eine Auftragsnummer erhalten muss, da eine Firma mehrere verschiedene Aufträge haben kann.
+* **Zentraler Postfach-Look (UI/UX im Outlook-Stil):** Die Weboberfläche bekommt ein zweigeteiltes Layout.
+* **Lernende Datenbank (Zeitersparnis):** Bekannte Absender sollen automatisch wiedererkannt und die zugehörige Firma vorausgefüllt werden, um die Tipparbeit auf ein Minimum zu reduzieren.
+* **Performance & Geschwindigkeit:** Das Tool soll extrem schnell und schlank laufen (auch auf schwächerer Hardware), damit das Abarbeiten und Verschieben/Umbenennen im Minutentakt flüssig von der Hand geht.
 
