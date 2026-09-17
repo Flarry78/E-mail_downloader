@@ -21,10 +21,10 @@ Ein Desktop-Tool zur automatisierten Erfassung und Sortierung von E-Mail-Anhäng
 * **Frontend:** HTML5, CSS3, Jinja2, JavaScript (SSE)
 * **Desktop Wrapper:** PyWebView | **Protokolle:** IMAP, MIME
 
-## 📝 Verbesserungspotenziale
-* **Ordner-Synchronisation:** Automatisches Update der SQLite-Datenbank, wenn Firmenordner im Dateisystem umbenannt werden.
-* **Dateityp-Erkennung & Filter:** Gezielter Download bestimmter Dateiendungen (z. B. nur `.pdf`, `.jpeg`) sowie Verwerfen unerwünschter Formate.
-* **White- & Blacklisting:** Einfache GUI-Verwaltung zum Blockieren oder Bevorzugen spezifischer Absenderadressen.
-* **Spam-Ordner-Durchsuchung:** Optionale Überprüfung des Spam-Ordners, um fälschlicherweise sortierte E-Mails von Whitelist-Absendern trotzdem zu erfassen.
+## 📝 Verbesserungspotenziale und geplante Änderungen
 
-<img src="templates/showcase.png" alt="Screenshot" width="1080">
+**Erweiterung der Zuweisung (Firma + Auftrag):** Bisher wurde jede E-Mail nur starr einem festen Firmennamen zugeteilt. Geplant ist, dass jede E-Mail zusätzlich eine Auftragsnummer erhalten muss, da eine Firma mehrere verschiedene Aufträge haben kann.
+**Zentraler Postfach-Look (UI/UX im Outlook-Stil):** Die Weboberfläche bekommt ein zweigeteiltes Layout.
+**Lernende Datenbank (Zeitersparnis):** Bekannte Absender sollen automatisch wiedererkannt und die zugehörige Firma vorausgefüllt werden, um die Tipparbeit auf ein Minimum zu reduzieren.
+**Performance & Geschwindigkeit:** Das Tool soll extrem schnell und schlank laufen (auch auf schwächerer Hardware), damit das Abarbeiten und Verschieben/Umbenennen im Minutentakt flüssig von der Hand geht.
+

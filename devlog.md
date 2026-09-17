@@ -56,3 +56,10 @@
 - fix für das gui beim starten der app
 - readme bearbeitet
 - datum als name für die ordner geaddet
+
+
+## 2026-09-15
+
+- Programm "Kunden" vorgestellt und Alternativen vorgeschlagen
+- Dadurch gemerkt was anders gemacht werden muss und wie es am besten sein soll
+- Refactor der Oberfläche, der Zuweisung der E-Mails, Spam-Filter und Speicherung geplant 
