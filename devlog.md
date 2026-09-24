@@ -63,3 +63,11 @@
 - Programm "Kunden" vorgestellt und Alternativen vorgeschlagen
 - Dadurch gemerkt was anders gemacht werden muss und wie es am besten sein soll
 - Refactor der Oberfläche, der Zuweisung der E-Mails, Spam-Filter und Speicherung geplant 
+
+
+## 2026-09-24
+
+- umgestiegen auf c#
+- projekt von grund auf neu gemacht
+- email download implementiert, eml datei und anhänge werden in ordner gepackt, ordner haben datum und hash id
+- sql datei, download log und json datei für die email iDs erstellt.
