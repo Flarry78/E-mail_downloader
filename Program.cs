@@ -32,13 +32,15 @@
             Console.WriteLine($"Zielordner: {zielOrdner}");
             Console.WriteLine(new string('-', 50));
 
+
             var emailService = new EmailService();
 
             try
             {
                 int port = 993;
-                // WICHTIG: Hier nutzen wir jetzt den neuen Namen mit "Async" und setzen "await" davor!
-                var neueEmails = await emailService.FetchNewEmailsAsync(imapServer, port, emailKonto, passwort);
+
+                // Übergabe des zielOrdners als letzter Parameter:
+                var neueEmails = await emailService.FetchNewEmailsAsync(imapServer, port, emailKonto, passwort, zielOrdner);
 
                 Console.WriteLine($"\n[Fertig] Prozess abgeschlossen. {neueEmails.Count} neue E-Mails verarbeitet.");
             }
