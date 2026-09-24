@@ -5,3 +5,6 @@ rules.db
 __pycache__
 build
 dist
+.vs
+bin
+obj
