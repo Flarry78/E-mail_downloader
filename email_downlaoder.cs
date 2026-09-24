@@ -7,6 +7,7 @@
     using System.Text;
     using System.Text.Json;
     using System.Threading.Tasks;
+    using Microsoft.Data.Sqlite;
     using MailKit;
     using MailKit.Net.Imap;
     using MailKit.Search;
@@ -15,13 +16,64 @@
     public class EmailService
     {
         private readonly string _jsonCachePath;
+        private readonly string _dbPath;
         private HashSet<string> _downloadedIds = new HashSet<string>();
 
         public EmailService()
         {
             string basisOrdner = AppDomain.CurrentDomain.BaseDirectory;
             _jsonCachePath = Path.Combine(basisOrdner, "downloaded_emails.json");
+            _dbPath = Path.Combine(basisOrdner, "rules.db");
+
             LoadCache();
+            InitDatabase();
+        }
+
+
+
+        private void InitDatabase()
+        {
+            using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
+            {
+                connection.Open();
+                string createTableQuery = @"
+                CREATE TABLE IF NOT EXISTS regeln (
+                    kennnummer INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email_adresse TEXT NOT NULL,
+                    absender_name TEXT NOT NULL,
+                    firma_ordner TEXT,
+                    UNIQUE(email_adresse, absender_name)
+                );";
+                using (var command = new SqliteCommand(createTableQuery, connection))
+                {
+                    command.ExecuteNonQuery();
+                }
+            }
+            Console.WriteLine("[Datenbank] SQLite-Datenbank 'rules.db' initialisiert.");
+        }
+
+        private void ErfasseOderPruefeEmail(string emailAdresse, string absenderName)
+        {
+            string emailClean = emailAdresse.ToLower().Trim();
+            string nameClean = string.IsNullOrWhiteSpace(absenderName) ? emailClean : absenderName.Trim();
+
+            using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
+            {
+                connection.Open();
+
+                // Nur prüfen, ob es schon da ist (Abgleich), und falls neu, in die DB eintragen (firma_ordner = NULL)
+                string insertQuery = @"
+                INSERT INTO regeln (email_adresse, absender_name, firma_ordner)
+                VALUES (@email, @name, NULL)
+                ON CONFLICT(email_adresse, absender_name) DO NOTHING;";
+
+                using (var insertCmd = new SqliteCommand(insertQuery, connection))
+                {
+                    insertCmd.Parameters.AddWithValue("@email", emailClean);
+                    insertCmd.Parameters.AddWithValue("@name", nameClean);
+                    insertCmd.ExecuteNonQuery();
+                }
+            }
         }
 
         private void LoadCache()
@@ -43,10 +95,6 @@
                     Console.WriteLine($"[Cache Fehler] Konnte JSON nicht laden: {ex.Message}");
                 }
             }
-            else
-            {
-                Console.WriteLine("[Cache] Keine bestehende JSON-Cache-Datei gefunden. Es wird eine neue erstellt.");
-            }
         }
 
         private void SaveCache()
@@ -55,7 +103,6 @@
             {
                 string jsonString = JsonSerializer.Serialize(_downloadedIds);
                 File.WriteAllText(_jsonCachePath, jsonString);
-                Console.WriteLine("[Cache] JSON-Cache erfolgreich aktualisiert und gespeichert.");
             }
             catch (Exception ex)
             {
@@ -94,6 +141,8 @@
             if (delayMs <= 0) delayMs = 1000;
 
             Directory.CreateDirectory(zielHauptOrdner);
+            string unsortedOrdnerPfad = Path.Combine(zielHauptOrdner, "unsorted");
+            Directory.CreateDirectory(unsortedOrdnerPfad);
 
             using (var client = new ImapClient())
             {
@@ -101,8 +150,6 @@
                 {
                     Console.WriteLine($"\n[IMAP] Verbinde zu {imapServer}:{port}...");
                     await client.ConnectAsync(imapServer, port, true);
-                    Console.WriteLine("[IMAP] Authentifiziere als " + email + "...");
-
                     await client.AuthenticateAsync(email, appPassword);
                     var inbox = client.Inbox;
                     await inbox.OpenAsync(FolderAccess.ReadWrite);
@@ -112,11 +159,9 @@
                     if (nurUngelesene) query = query.And(SearchQuery.NotSeen);
                     if (tageZurueck > 0)
                     {
-                        var datumGrenze = DateTime.Now.AddDays(-tageZurueck);
-                        query = query.And(SearchQuery.SentSince(datumGrenze));
+                        query = query.And(SearchQuery.SentSince(DateTime.Now.AddDays(-tageZurueck)));
                     }
 
-                    Console.WriteLine($"[Suche] Suche E-Mails (Filter: Nur Ungelesen = {nurUngelesene}, Letzte {tageZurueck} Tage)...");
                     var uids = await inbox.SearchAsync(query);
                     Console.WriteLine($"[Suche] Server hat {uids.Count} passende E-Mails gemeldet.");
 
@@ -130,28 +175,29 @@
                             Console.WriteLine($"\n--- Verarbeite E-Mail {counter} von {uids.Count} (ID: {uniqueId}) ---");
                             var message = await inbox.GetMessageAsync(uid);
 
-                            string absenderRoh = message.From.ToString();
+                            var mailbox = message.From.Mailboxes.FirstOrDefault();
+                            string absenderName = mailbox?.Name ?? message.From.ToString();
+                            string absenderEmail = mailbox?.Address ?? message.From.ToString();
                             string betreff = message.Subject ?? "Kein Betreff";
                             DateTime datum = message.Date.DateTime;
 
-                            Console.WriteLine($"  Von:     {absenderRoh}");
-                            Console.WriteLine($"  Betreff: {betreff}");
-                            Console.WriteLine($"  Datum:   {datum}");
+                            // Absender in die DB eintragen / prüfen (ohne automatische Sortierung)
+                            ErfasseOderPruefeEmail(absenderEmail, absenderName);
 
-                            // Ordnerstruktur: [Datum]_[ID-Hash]
                             string datumString = datum.ToString("yyyy-MM-dd_HHmmss");
                             string idHash = GenerateShortHash(uniqueId);
                             string ordnerName = $"{datumString}_{idHash}";
 
-                            string emailOrdnerPfad = Path.Combine(zielHauptOrdner, ordnerName);
-                            Directory.CreateDirectory(emailOrdnerPfad);
+                            // WICHTIG: Jede E-Mail landet JETZT IMMER im "unsorted"-Ordner
+                            string zielOrdnerPfad = Path.Combine(unsortedOrdnerPfad, ordnerName);
+                            Directory.CreateDirectory(zielOrdnerPfad);
+                            Console.WriteLine($"  [Info] Abgelegt unter unsorted/: {absenderName}");
 
                             // 1. Die .eml-Datei speichern
-                            string emlPfad = Path.Combine(emailOrdnerPfad, "email.eml");
+                            string emlPfad = Path.Combine(zielOrdnerPfad, "email.eml");
                             await message.WriteToAsync(emlPfad);
-                            Console.WriteLine($"  [Gespeichert] E-Mail (.eml) abgelegt.");
 
-                            // 2. Anhänge durchgehen (Nur echte Anhänge via Content-Disposition)
+                            // 2. Anhänge filtern und speichern (Nur echte Anhänge)
                             foreach (var attachment in message.Attachments)
                             {
                                 if (attachment is MimePart mimePart)
@@ -160,19 +206,14 @@
                                     if (disposition != null && disposition.Equals("attachment", StringComparison.OrdinalIgnoreCase))
                                     {
                                         string originalFileName = mimePart.FileName ?? "unbenannt.dat";
-                                        string anhangPfad = Path.Combine(emailOrdnerPfad, originalFileName);
+                                        string anhangPfad = Path.Combine(zielOrdnerPfad, originalFileName);
 
                                         using (var memoryStream = new MemoryStream())
                                         {
                                             await mimePart.Content.DecodeToAsync(memoryStream);
                                             await File.WriteAllBytesAsync(anhangPfad, memoryStream.ToArray());
                                         }
-
                                         Console.WriteLine($"    [Anhang Gespeichert] -> {originalFileName}");
-                                    }
-                                    else
-                                    {
-                                        Console.WriteLine($"    [Übersprungen] Kein echter Anhang (Inline/Logo)");
                                     }
                                 }
                             }
@@ -180,7 +221,7 @@
                             newEmails.Add(new EmailPreviewModel
                             {
                                 UniqueId = uniqueId,
-                                Sender = absenderRoh,
+                                Sender = message.From.ToString(),
                                 Subject = betreff,
                                 Date = datum,
                                 BodySnippet = message.TextBody ?? message.HtmlBody ?? "[Kein Textinhalt]"
@@ -188,16 +229,10 @@
 
                             _downloadedIds.Add(uniqueId);
 
-                            // Rate Limiting / Pause
                             if (delayMs > 0)
                             {
-                                Console.WriteLine($"  [Pause] Warte {delayMs} ms...");
                                 await Task.Delay(delayMs);
                             }
-                        }
-                        else
-                        {
-                            Console.WriteLine($"[Übersprungen] E-Mail ID {uniqueId} ist bereits im Cache.");
                         }
                         counter++;
                     }
@@ -206,13 +241,8 @@
                     {
                         SaveCache();
                     }
-                    else
-                    {
-                        Console.WriteLine("\n[Info] Keine neuen E-Mails zum Herunterladen gefunden.");
-                    }
 
                     await client.DisconnectAsync(true);
-                    Console.WriteLine("\n[IMAP] Verbindung getrennt.");
                 }
                 catch (Exception ex)
                 {
