@@ -2,33 +2,101 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
-        Title="E-Mail Organizer & Downloader" Height="650" Width="1000">
-
+        Title="E-Mail Manager - Chef-Ansicht" Height="700" Width="1200">
     <Grid>
-        <!-- Das Layout wird in 3 Spalten unterteilt: Links Ordner, Mitte Liste, Rechts Vorschau -->
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="200"/>
-            <ColumnDefinition Width="300"/>
+            <ColumnDefinition Width="320"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Spalte 1: Linke Navigation (Ordner) -->
-        <ListBox Grid.Column="0" Background="#FFF0F0F0" BorderBrush="#FFDDDDDD">
-            <ListBoxItem Content="📥 Unsorted" FontWeight="Bold" IsSelected="True"/>
-            <ListBoxItem Content="⚙️ Regeln / SQLite"/>
-        </ListBox>
+        <!-- SPALTE 0: Linke Seite (Button + Kompakte Liste) -->
+        <Grid Grid.Column="0" Background="#FFF0F0F0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
 
-        <!-- Spalte 2: Mitte (Liste der E-Mails aus dem Unsorted-Ordner) -->
-        <ListView x:Name="EmailListView" Grid.Column="1" BorderBrush="#FFDDDDDD" SelectionChanged="EmailListView_SelectionChanged">
-            <ListView.View>
-                <GridView>
-                    <GridViewColumn Header="Absender" DisplayMemberBinding="{Binding Sender}" Width="130"/>
-                    <GridViewColumn Header="Datum" DisplayMemberBinding="{Binding Date}" Width="100"/>
-                </GridView>
-            </ListView.View>
-        </ListView>
+            <!-- Abruf-Button -->
+            <Button x:Name="BtnStartDownload" Grid.Row="0" Content="📥 E-Mails abrufen" 
+                    Margin="10,10,5,10" Padding="10" Background="#FF007ACC" Foreground="White" 
+                    FontWeight="Bold" Click="BtnStartDownload_Click"/>
 
-        <!-- Spalte 3: Rechts (E-Mail Vorschau über WebView2 für sauberes HTML) -->
-        <wv2:WebView2 x:Name="EmailWebView" Grid.Column="2" />
+            <!-- Kompakte E-Mail-Liste -->
+            <ListView x:Name="EmailListView" Grid.Row="1" Margin="10,0,10,10" BorderBrush="#FFDDDDDD" 
+                      SelectionChanged="EmailListView_SelectionChanged" SelectionMode="Single">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Margin="4,6,4,6">
+                            <TextBlock Text="{Binding Sender}" FontWeight="Bold" FontSize="12" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{Binding SenderEmail}" FontSize="11" Foreground="#FF0066CC" TextTrimming="CharacterEllipsis" Margin="0,1,0,1"/>
+                            <TextBlock Text="{Binding Subject}" FontSize="11" Foreground="#FF555555" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
+
+        <!-- SPALTE 1: Rechte Seite (Details, Eingabe & Vorschau) -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Oben: Header-Info, Eingabefelder & Einstellungen-Button -->
+            <Border Grid.Row="0" Background="#FFF9F9F9" BorderBrush="#FFDDDDDD" BorderThickness="0,0,0,1" Padding="15">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Kleine Kopfzeile mit Betreff/Absender und rechts das Zahnrad -->
+                    <Grid Grid.Row="0" Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0">
+                            <TextBlock x:Name="TxtSubject" Text="Betreff: (Keine E-Mail ausgewählt)" FontWeight="Bold" FontSize="15" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="TxtSender" Text="Absender: -" FontSize="12" Foreground="#FF555555" TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <!-- Der Einstellungen / Optionen Button -->
+                        <Button x:Name="BtnSettings" Grid.Column="1" Content="⚙️ Einstellungen" Width="110" Height="30" VerticalAlignment="Top"
+                                Background="#FFE0E0E0" Foreground="#FF333333" FontWeight="Bold" Click="BtnSettings_Click"/>
+                    </Grid>
+
+                    <!-- Eingabefelder: Auftragsnummer links, Firma rechts nebeneinander -->
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="120"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Auftragsnummer -->
+                        <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                            <TextBlock Text="Auftragsnummer:" FontSize="11" FontWeight="Bold" Foreground="#FF333333" Margin="0,0,0,2"/>
+                            <TextBox x:Name="TxtOrderNumber" Height="28" VerticalContentAlignment="Center" Padding="4"/>
+                        </StackPanel>
+
+                        <!-- Firmenordner Auswahl -->
+                        <StackPanel Grid.Column="1" Margin="0,0,10,0">
+                            <TextBlock Text="Firma / Ordner (Auto-Erkennung):" FontSize="11" FontWeight="Bold" Foreground="#FF333333" Margin="0,0,0,2"/>
+                            <ComboBox x:Name="CmbCompany" IsEditable="True" Height="28" VerticalContentAlignment="Center"/>
+                        </StackPanel>
+
+                        <!-- Zuordnen Button -->
+                        <Button x:Name="BtnAssign" Grid.Column="2" Content="🚀 Einsortieren" Height="28" VerticalAlignment="Bottom"
+                                Background="#FF28A745" Foreground="White" FontWeight="Bold" Click="BtnAssign_Click"/>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <!-- Unten: WebView2 Vorschau -->
+            <wv2:WebView2 x:Name="EmailWebView" Grid.Row="1"/>
+        </Grid>
     </Grid>
 </Window>

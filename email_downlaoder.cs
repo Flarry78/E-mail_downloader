@@ -1,4 +1,4 @@
-﻿namespace email_csharp 
+﻿namespace email_csharp
 {
     using System;
     using System.Collections.Generic;
@@ -29,14 +29,14 @@
             InitDatabase();
         }
 
-
-
         private void InitDatabase()
         {
             using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
             {
                 connection.Open();
-                string createTableQuery = @"
+
+                // 1. Tabelle für das Firmen-Gedächtnis (Absender -> Firma)
+                string createRulesTable = @"
                 CREATE TABLE IF NOT EXISTS regeln (
                     kennnummer INTEGER PRIMARY KEY AUTOINCREMENT,
                     email_adresse TEXT NOT NULL,
@@ -44,12 +44,25 @@
                     firma_ordner TEXT,
                     UNIQUE(email_adresse, absender_name)
                 );";
-                using (var command = new SqliteCommand(createTableQuery, connection))
+
+                // 2. Tabelle für die aktuellen Unsorted-E-Mails inklusive Absender-E-Mail
+                string createUnsortedTable = @"
+                CREATE TABLE IF NOT EXISTS unsorted_emails (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    unique_id TEXT UNIQUE,
+                    sender TEXT,
+                    sender_email TEXT,
+                    subject TEXT,
+                    date TEXT,
+                    file_path TEXT
+                );";
+
+                using (var command = new SqliteCommand($"{createRulesTable} {createUnsortedTable}", connection))
                 {
                     command.ExecuteNonQuery();
                 }
             }
-            Console.WriteLine("[Datenbank] SQLite-Datenbank 'rules.db' initialisiert.");
+            Console.WriteLine("[Datenbank] SQLite-Tabellen 'regeln' und 'unsorted_emails' initialisiert.");
         }
 
         private void ErfasseOderPruefeEmail(string emailAdresse, string absenderName)
@@ -61,7 +74,6 @@
             {
                 connection.Open();
 
-                // Nur prüfen, ob es schon da ist (Abgleich), und falls neu, in die DB eintragen (firma_ordner = NULL)
                 string insertQuery = @"
                 INSERT INTO regeln (email_adresse, absender_name, firma_ordner)
                 VALUES (@email, @name, NULL)
@@ -74,6 +86,60 @@
                     insertCmd.ExecuteNonQuery();
                 }
             }
+        }
+
+        // Speichert eine heruntergeladene E-Mail mit Absender-E-Mail in die DB
+        private void SpeichereUnsortedEmailInDb(string uniqueId, string sender, string senderEmail, string subject, DateTime date, string filePath)
+        {
+            using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
+            {
+                connection.Open();
+                string query = @"
+                INSERT OR REPLACE INTO unsorted_emails (unique_id, sender, sender_email, subject, date, file_path)
+                VALUES (@uid, @sender, @email, @subject, @date, @path);";
+
+                using (var cmd = new SqliteCommand(query, connection))
+                {
+                    cmd.Parameters.AddWithValue("@uid", uniqueId);
+                    cmd.Parameters.AddWithValue("@sender", sender);
+                    cmd.Parameters.AddWithValue("@email", senderEmail);
+                    cmd.Parameters.AddWithValue("@subject", subject);
+                    cmd.Parameters.AddWithValue("@date", date.ToString("o")); // ISO-Format für saubere Sortierung
+                    cmd.Parameters.AddWithValue("@path", filePath);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        // Holt alle unsortierten E-Mails inklusive Absender-E-Mail für die GUI ab
+        public List<EmailPreviewModel> GetUnsortedEmailsFromDb()
+        {
+            var list = new List<EmailPreviewModel>();
+            using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
+            {
+                connection.Open();
+                string query = "SELECT unique_id, sender, sender_email, subject, date, file_path FROM unsorted_emails ORDER BY date DESC;";
+
+                using (var cmd = new SqliteCommand(query, connection))
+                {
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            list.Add(new EmailPreviewModel
+                            {
+                                UniqueId = reader.GetString(0),
+                                Sender = reader.GetString(1),
+                                SenderEmail = reader.IsDBNull(2) ? "" : reader.GetString(2),
+                                Subject = reader.GetString(3),
+                                Date = DateTime.Parse(reader.GetString(4)),
+                                FilePath = reader.GetString(5)
+                            });
+                        }
+                    }
+                }
+            }
+            return list;
         }
 
         private void LoadCache()
@@ -181,14 +247,13 @@
                             string betreff = message.Subject ?? "Kein Betreff";
                             DateTime datum = message.Date.DateTime;
 
-                            // Absender in die DB eintragen / prüfen (ohne automatische Sortierung)
+                            // Absender in die DB eintragen / prüfen
                             ErfasseOderPruefeEmail(absenderEmail, absenderName);
 
                             string datumString = datum.ToString("yyyy-MM-dd_HHmmss");
                             string idHash = GenerateShortHash(uniqueId);
                             string ordnerName = $"{datumString}_{idHash}";
 
-                            // WICHTIG: Jede E-Mail landet JETZT IMMER im "unsorted"-Ordner
                             string zielOrdnerPfad = Path.Combine(unsortedOrdnerPfad, ordnerName);
                             Directory.CreateDirectory(zielOrdnerPfad);
                             Console.WriteLine($"  [Info] Abgelegt unter unsorted/: {absenderName}");
@@ -197,7 +262,7 @@
                             string emlPfad = Path.Combine(zielOrdnerPfad, "email.eml");
                             await message.WriteToAsync(emlPfad);
 
-                            // 2. Anhänge filtern und speichern (Nur echte Anhänge)
+                            // 2. Anhänge filtern und speichern
                             foreach (var attachment in message.Attachments)
                             {
                                 if (attachment is MimePart mimePart)
@@ -218,13 +283,17 @@
                                 }
                             }
 
+                            // 3. Direkt mit Absender-E-Mail in die SQLite-Unsorted-Tabelle schreiben
+                            SpeichereUnsortedEmailInDb(uniqueId, absenderName, absenderEmail, betreff, datum, emlPfad);
+
                             newEmails.Add(new EmailPreviewModel
                             {
                                 UniqueId = uniqueId,
-                                Sender = message.From.ToString(),
+                                Sender = absenderName,
+                                SenderEmail = absenderEmail,
                                 Subject = betreff,
                                 Date = datum,
-                                BodySnippet = message.TextBody ?? message.HtmlBody ?? "[Kein Textinhalt]"
+                                FilePath = emlPfad
                             });
 
                             _downloadedIds.Add(uniqueId);
@@ -258,8 +327,9 @@
     {
         public string UniqueId { get; set; }
         public string Sender { get; set; }
+        public string SenderEmail { get; set; }
         public string Subject { get; set; }
         public DateTime Date { get; set; }
-        public string BodySnippet { get; set; }
+        public string FilePath { get; set; }
     }
 }
