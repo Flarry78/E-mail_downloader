@@ -1,3 +1,4 @@
 <Solution>
+  <Project Path="../email_csharp.GUI/email_csharp.GUI.csproj" />
   <Project Path="email_csharp.csproj" />
 </Solution>

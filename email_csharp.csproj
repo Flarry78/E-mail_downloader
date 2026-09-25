@@ -17,6 +17,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\email_csharp.GUI\email_csharp.GUI.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update=".env">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
