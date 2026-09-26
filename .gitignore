@@ -1,10 +1,7 @@
+config.json
 .env
-fortschritt.json
 downloader.log*
 rules.db
-__pycache__
-build
-dist
 .vs
 bin
 obj

@@ -1,16 +1,15 @@
-﻿using System;
-using System.IO;
-using System.Text;
-using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Media;
-using DotNetEnv;
-using MimeKit;
-using email_csharp;
-
-namespace email_csharp.GUI
+﻿namespace email_csharp.GUI
 {
+    using System;
+    using System.IO;
+    using System.Text;
+    using System.Threading.Tasks;
+    using System.Windows;
+    using System.Windows.Controls;
+    using System.Windows.Media;
+    using MimeKit;
+    using email_csharp;
+
     public partial class MainWindow : Window
     {
         private string _zielOrdner;
@@ -18,7 +17,7 @@ namespace email_csharp.GUI
         public MainWindow()
         {
             InitializeComponent();
-            LadeUmgebungsvariablen();
+            LadeKonfiguration();
 
             // Initialisiere WebView2 vorab
             _ = InitializeWebViewAsync();
@@ -33,20 +32,18 @@ namespace email_csharp.GUI
             await EmailWebView.EnsureCoreWebView2Async();
         }
 
-        private void LadeUmgebungsvariablen()
+        private void LadeKonfiguration()
         {
-            try { Env.Load(); }
-            catch
+            try
             {
-                try
-                {
-                    string rootEnv = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..\\..\\..\\..\\.env");
-                    if (File.Exists(rootEnv)) { Env.Load(rootEnv); }
-                }
-                catch { }
+                var config = AppConfig.Laden();
+                _zielOrdner = config.ZielOrdner;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Fehler beim Laden der config.json: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
             }
 
-            _zielOrdner = Environment.GetEnvironmentVariable("ZIEL_ORDNER");
             if (string.IsNullOrEmpty(_zielOrdner))
             {
                 _zielOrdner = AppDomain.CurrentDomain.BaseDirectory;
@@ -90,24 +87,42 @@ namespace email_csharp.GUI
             }
             catch (Exception ex) { Console.WriteLine("Fehler beim Einlesen der Ordner: " + ex.Message); }
         }
+
         private void BtnSettings_Click(object sender, RoutedEventArgs e)
         {
             var settingsWin = new SettingsWindow(this);
             settingsWin.ShowDialog();
 
             // Nach dem Schließen der Einstellungen neu laden (z. B. falls sich der ZIEL_ORDNER geändert hat)
-            LadeUmgebungsvariablen();
+            LadeKonfiguration();
             LadeFirmenOrdnerInComboBox();
         }
+
         private async void BtnStartDownload_Click(object sender, RoutedEventArgs e)
         {
-            string imapServer = Environment.GetEnvironmentVariable("IMAP_SERVER");
-            string emailKonto = Environment.GetEnvironmentVariable("EMAIL_KONTO");
-            string passwort = Environment.GetEnvironmentVariable("PASSWORT");
+            string imapServer;
+            string emailKonto;
+            string passwort;
+            string unsortedOrdner;
+
+            try
+            {
+                var config = AppConfig.Laden();
+                imapServer = config.ImapServer;
+                emailKonto = config.EmailKonto;
+                passwort = config.Passwort;
+                _zielOrdner = config.ZielOrdner;
+                unsortedOrdner = config.UnsortedOrdner;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Fehler beim Laden der config.json: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
 
             if (string.IsNullOrEmpty(imapServer) || string.IsNullOrEmpty(emailKonto) || string.IsNullOrEmpty(passwort))
             {
-                MessageBox.Show("Bitte überprüfe deine .env-Datei. Zugangsdaten fehlen!", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show("Bitte überprüfe deine config.json. Zugangsdaten fehlen!", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
 
@@ -124,7 +139,7 @@ namespace email_csharp.GUI
                 progressWindow.AppendLog("Starte Verbindung zum IMAP-Server...\n");
 
                 var emailService = new EmailService();
-                var neueEmails = await emailService.FetchNewEmailsAsync(imapServer, 993, emailKonto, passwort, _zielOrdner);
+                var neueEmails = await emailService.FetchNewEmailsAsync(imapServer, 993, emailKonto, passwort, unsortedOrdner);
 
                 progressWindow.AppendLog($"\nFertig! {neueEmails.Count} neue E-Mails heruntergeladen.");
             }
@@ -151,17 +166,38 @@ namespace email_csharp.GUI
                 TxtSubject.Text = $"Betreff: {selectedEmail.Subject}";
                 TxtSender.Text = $"Absender: {selectedEmail.Sender}  |  Datum: {selectedEmail.Date:dd.MM.yyyy HH:mm}";
 
+                // NEU: Automatisch prüfen, ob für diesen Absender bereits eine Firma in den Regeln hinterlegt ist
+                try
+                {
+                    var emailService = new EmailService();
+                    string gespeicherteFirma = emailService.HoleGespeicherteFirmaFuerAbsender(selectedEmail.SenderEmail);
+
+                    if (!string.IsNullOrEmpty(gespeicherteFirma))
+                    {
+                        CmbCompany.Text = gespeicherteFirma;
+                    }
+                    else
+                    {
+                        CmbCompany.Text = string.Empty; // Feld leeren, falls keine Regel existiert
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Fehler beim Laden der Firmenregel]: {ex.Message}");
+                }
+
                 // E-Mail Inhalt über WebView2 anzeigen (.eml Datei einlesen via MimeKit)
-                if (File.Exists(selectedEmail.FilePath))
+                string emlFile = Path.Combine(selectedEmail.FilePath, "email.eml");
+                if (File.Exists(emlFile))
                 {
                     try
                     {
-                        var message = await MimeMessage.LoadAsync(selectedEmail.FilePath);
+                        var message = await MimeMessage.LoadAsync(emlFile);
                         string htmlContent = message.HtmlBody;
 
                         if (string.IsNullOrEmpty(htmlContent))
                         {
-                            // Fallback auf Text, wenn kein HTML vorhanden ist (als einfaches HTML formatiert)
+                            // Fallback auf Text, wenn kein HTML vorhanden ist
                             string textContent = message.TextBody ?? "[Kein Textinhalt]";
                             htmlContent = $"<html><body><pre style='font-family:sans-serif;'>{System.Net.WebUtility.HtmlEncode(textContent)}</pre></body></html>";
                         }
@@ -179,149 +215,199 @@ namespace email_csharp.GUI
             }
         }
 
+        // Einsortier-Logik: Verschiebt den gesamten E-Mail-Ordner und löscht den SQLite-Eintrag
         private void BtnAssign_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show("Zuordnungs-Logik wird im nächsten Schritt aktiviert!", "Info", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-    }
-
-
-    // ==========================================
-    // FORTSCHRITTS-FENSTER (POP-UP)
-    // ==========================================
-    public class ProgressDialog : Window
-    {
-        public TextBox TxtLog { get; private set; }
-        private Button _btnOk;
-        private bool _isFinished = false;
-
-        public ProgressDialog(Window owner)
-        {
-            Owner = owner;
-            Title = "E-Mail Download läuft...";
-            Width = 500;
-            Height = 350;
-            WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            ResizeMode = ResizeMode.NoResize;
-
-            Closing += (s, e) =>
+            if (!(EmailListView.SelectedItem is EmailPreviewModel selectedEmail))
             {
-                if (!_isFinished)
+                MessageBox.Show("Bitte wähle zuerst eine E-Mail aus der Liste aus.", "Hinweis", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            string auftragsnummer = TxtOrderNumber.Text.Trim();
+            string firma = CmbCompany.Text.Trim();
+
+            if (string.IsNullOrEmpty(auftragsnummer))
+            {
+                MessageBox.Show("Bitte gib eine Auftragsnummer ein.", "Fehler", MessageBoxButton.OK, MessageBoxImage.Warning);
+                TxtOrderNumber.Focus();
+                return;
+            }
+
+            if (string.IsNullOrEmpty(firma))
+            {
+                MessageBox.Show("Bitte wähle oder gib einen Firmennamen an.", "Fehler", MessageBoxButton.OK, MessageBoxImage.Warning);
+                CmbCompany.Focus();
+                return;
+            }
+
+            if (!Directory.Exists(selectedEmail.FilePath))
+            {
+                MessageBox.Show("Der originale E-Mail-Ordner wurde im Dateisystem nicht gefunden.", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            try
+            {
+                // Den Service aufrufen (Ordner wird in den Firmenordner verschoben + Hash-Benennung + Regel-Speicherung)
+                var emailService = new EmailService();
+                emailService.OrdnerEinsortierenUndLoeschen(selectedEmail.Id, selectedEmail.UniqueId, selectedEmail.FilePath, auftragsnummer, firma);
+
+                // UI reibungslos im Hintergrund zurücksetzen und aktualisieren
+                LadeUnsortedEmailsInUi();
+                LadeFirmenOrdnerInComboBox();
+                TxtOrderNumber.Clear();
+                CmbCompany.Text = string.Empty;
+                TxtSubject.Text = "Betreff: (Keine E-Mail ausgewählt)";
+                TxtSender.Text = "Absender: -";
+                if (EmailWebView.CoreWebView2 != null)
                 {
-                    e.Cancel = true;
+                    EmailWebView.CoreWebView2.NavigateToString("<html><body></body></html>");
                 }
-                else
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Fehler beim Einsortieren: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+
+        // ==========================================
+        // FORTSCHRITTS-FENSTER (POP-UP)
+        // ==========================================
+        public class ProgressDialog : Window
+        {
+            public TextBox TxtLog { get; private set; }
+            private Button _btnOk;
+            private bool _isFinished = false;
+
+            public ProgressDialog(Window owner)
+            {
+                Owner = owner;
+                Title = "E-Mail Download läuft...";
+                Width = 500;
+                Height = 350;
+                WindowStartupLocation = WindowStartupLocation.CenterOwner;
+                ResizeMode = ResizeMode.NoResize;
+
+                Closing += (s, e) =>
                 {
+                    if (!_isFinished)
+                    {
+                        e.Cancel = true;
+                    }
+                    else
+                    {
+                        if (Owner is MainWindow mw)
+                        {
+                            mw.IsEnabled = true;
+                            mw.LadeUnsortedEmailsInUi();
+                        }
+                    }
+                };
+
+                var grid = new Grid();
+                grid.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(1, GridUnitType.Star) });
+                grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+
+                TxtLog = new TextBox
+                {
+                    IsReadOnly = true,
+                    AcceptsReturn = true,
+                    TextWrapping = TextWrapping.Wrap,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(0, 255, 128)),
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize = 13,
+                    Margin = new Thickness(10),
+                    Padding = new Thickness(5)
+                };
+                Grid.SetRow(TxtLog, 0);
+                grid.Children.Add(TxtLog);
+
+                _btnOk = new Button
+                {
+                    Content = "OK (Bitte warten...)",
+                    IsEnabled = false,
+                    Height = 35,
+                    Margin = new Thickness(10, 0, 10, 10),
+                    FontWeight = FontWeights.Bold,
+                    Background = new SolidColorBrush(Color.FromRgb(0, 122, 204)),
+                    Foreground = Brushes.White
+                };
+                _btnOk.Click += (s, e) =>
+                {
+                    _isFinished = true;
                     if (Owner is MainWindow mw)
                     {
                         mw.IsEnabled = true;
-                        mw.LadeUnsortedEmailsInUi(); // Aktualisiert die Liste im Hauptfenster beim Schließen
+                        mw.LadeUnsortedEmailsInUi();
                     }
-                }
-            };
+                    Close();
+                };
+                Grid.SetRow(_btnOk, 1);
+                grid.Children.Add(_btnOk);
 
-            var grid = new Grid();
-            grid.RowDefinitions.Add(new RowDefinition() { Height = new GridLength(1, GridUnitType.Star) });
-            grid.RowDefinitions.Add(new RowDefinition() { Height = GridLength.Auto });
+                Content = grid;
+            }
 
-            TxtLog = new TextBox
+            public void AppendLog(string text)
             {
-                IsReadOnly = true,
-                AcceptsReturn = true,
-                TextWrapping = TextWrapping.Wrap,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
-                Foreground = new SolidColorBrush(Color.FromRgb(0, 255, 128)),
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = 13,
-                Margin = new Thickness(10),
-                Padding = new Thickness(5)
-            };
-            Grid.SetRow(TxtLog, 0);
-            grid.Children.Add(TxtLog);
-
-            _btnOk = new Button
-            {
-                Content = "OK (Bitte warten...)",
-                IsEnabled = false,
-                Height = 35,
-                Margin = new Thickness(10, 0, 10, 10),
-                FontWeight = FontWeights.Bold,
-                Background = new SolidColorBrush(Color.FromRgb(0, 122, 204)),
-                Foreground = Brushes.White
-            };
-            _btnOk.Click += (s, e) =>
-            {
-                _isFinished = true;
-                if (Owner is MainWindow mw)
+                Dispatcher.Invoke(() =>
                 {
-                    mw.IsEnabled = true;
-                    mw.LadeUnsortedEmailsInUi();
-                }
-                Close();
-            };
-            Grid.SetRow(_btnOk, 1);
-            grid.Children.Add(_btnOk);
+                    TxtLog.AppendText(text);
+                    TxtLog.ScrollToEnd();
+                });
+            }
 
-            Content = grid;
-        }
-
-        public void AppendLog(string text)
-        {
-            Dispatcher.Invoke(() =>
+            public void TaskFinished()
             {
-                TxtLog.AppendText(text);
-                TxtLog.ScrollToEnd();
-            });
-        }
-
-        public void TaskFinished()
-        {
-            Dispatcher.Invoke(() =>
-            {
-                _isFinished = true;
-                _btnOk.IsEnabled = true;
-                _btnOk.Content = "OK - Schließen";
-                Title = "Download abgeschlossen!";
-            });
-        }
-    }
-
-
-    // ==========================================
-    // HILFSKLASSE FÜR KONSOLEN-UMLEITUNG
-    // =сон
-    // ==========================================
-    public class TextBoxWriter : TextWriter
-    {
-        private readonly TextBox _outputTextBox;
-
-        public TextBoxWriter(TextBox outputTextBox)
-        {
-            _outputTextBox = outputTextBox;
-        }
-
-        public override void Write(char value)
-        {
-            _outputTextBox.Dispatcher.Invoke(() =>
-            {
-                _outputTextBox.AppendText(value.ToString());
-                _outputTextBox.ScrollToEnd();
-            });
-        }
-
-        public override void Write(string value)
-        {
-            if (value != null)
-            {
-                _outputTextBox.Dispatcher.Invoke(() =>
+                Dispatcher.Invoke(() =>
                 {
-                    _outputTextBox.AppendText(value);
-                    _outputTextBox.ScrollToEnd();
+                    _isFinished = true;
+                    _btnOk.IsEnabled = true;
+                    _btnOk.Content = "OK - Schließen";
+                    Title = "Download abgeschlossen!";
                 });
             }
         }
 
-        public override Encoding Encoding => Encoding.UTF8;
+
+        // ==========================================
+        // HILFSKLASSE FÜR KONSOLEN-UMLEITUNG
+        // ==========================================
+        public class TextBoxWriter : TextWriter
+        {
+            private readonly TextBox _outputTextBox;
+
+            public TextBoxWriter(TextBox outputTextBox)
+            {
+                _outputTextBox = outputTextBox;
+            }
+
+            public override void Write(char value)
+            {
+                _outputTextBox.Dispatcher.Invoke(() =>
+                {
+                    _outputTextBox.AppendText(value.ToString());
+                    _outputTextBox.ScrollToEnd();
+                });
+            }
+
+            public override void Write(string value)
+            {
+                if (value != null)
+                {
+                    _outputTextBox.Dispatcher.Invoke(() =>
+                    {
+                        _outputTextBox.AppendText(value);
+                        _outputTextBox.ScrollToEnd();
+                    });
+                }
+            }
+
+            public override Encoding Encoding => Encoding.UTF8;
+        }
     }
 }

@@ -71,3 +71,12 @@
 - projekt von grund auf neu gemacht
 - email download implementiert, eml datei und anhänge werden in ordner gepackt, ordner haben datum und hash id
 - sql datei, download log und json datei für die email iDs erstellt.
+
+
+## 2026-09-25
+
+- gui erstellt mit WPF
+- felder für auftragsnummer und firmenname 
+- einstellungen in der gui möglich (imap passwort, zielpfad ändern, email etc)
+- 2 sql datenbanken zum permanenten und flüchtigem speichern der emails
+- folder werden gescannt und als name im dropdown vorgeschlagen

@@ -1,41 +1,43 @@
-﻿using System;
-using System.IO;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Media;
-using DotNetEnv;
-
-namespace email_csharp.GUI
+﻿namespace email_csharp.GUI
 {
+    using System;
+    using System.IO;
+    using System.Text.Json;
+    using System.Windows;
+    using System.Windows.Controls;
+    using System.Windows.Media;
+    using email_csharp;
+
     public class SettingsWindow : Window
     {
         private TextBox _txtZielOrdner;
+        private TextBox _txtUnsortedOrdner;
         private TextBox _txtImapServer;
         private TextBox _txtEmailKonto;
         private TextBox _txtPasswort;
-        private string _envPfad;
+        private string _configPfad;
 
         public SettingsWindow(Window owner)
         {
             Owner = owner;
             Title = "Einstellungen & Optionen";
             Width = 550;
-            Height = 420;
+            Height = 480;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ResizeMode = ResizeMode.NoResize;
 
-            ErmittleEnvPfad();
+            ErmittleConfigPfad();
             ErstelleUiLayout();
-            LadeWerteAusEnv();
+            LadeWerteAusConfig();
         }
 
-        private void ErmittleEnvPfad()
+        private void ErmittleConfigPfad()
         {
-            _envPfad = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".env");
-            if (!File.Exists(_envPfad))
+            _configPfad = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+            if (!File.Exists(_configPfad))
             {
-                string rootEnv = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..\\..\\..\\..\\.env");
-                if (File.Exists(rootEnv)) { _envPfad = rootEnv; }
+                string rootConfig = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..\\..\\..\\..\\config.json");
+                if (File.Exists(rootConfig)) { _configPfad = rootConfig; }
             }
         }
 
@@ -43,28 +45,33 @@ namespace email_csharp.GUI
         {
             var grid = new Grid { Margin = new Thickness(20) };
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 0: Zielordner
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 1: IMAP
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 2: Konto
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 3: Passwort
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 1: Unsorted-Ordner
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 2: IMAP
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 3: Konto
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 4: Passwort
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // Spacer
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 4: Buttons
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 5: Buttons
 
             int row = 0;
 
-            // --- 1. Zielordner für Firmen ---
-            FügeEingabeZeile(grid, row, "Haupt-Zielordner (Firmen & Unsorted):", out _txtZielOrdner, true);
+            // --- 1. Haupt-Zielordner ---
+            FügeEingabeZeile(grid, row, "Haupt-Zielordner (Firmen):", out _txtZielOrdner, true, WähleZielOrdnerAus);
             row++;
 
-            // --- 2. IMAP Server ---
-            FügeEingabeZeileHinzuEinfach(grid, row, "IMAP-Server:", out _txtImapServer);
+            // --- 2. Unsorted-Ordner ---
+            FügeEingabeZeile(grid, row, "Unsorted-Ordner (Eingang):", out _txtUnsortedOrdner, true, WähleUnsortedOrdnerAus);
             row++;
 
-            // --- 3. E-Mail Konto ---
-            FügeEingabeZeileHinzuEinfach(grid, row, "E-Mail-Konto / Benutzer:", out _txtEmailKonto);
+            // --- 3. IMAP Server ---
+            FügeEingabeZeileSimple(grid, row, "IMAP-Server:", out _txtImapServer);
             row++;
 
-            // --- 4. Passwort / App-Key ---
-            FügeEingabeZeileHinzuEinfach(grid, row, "Passwort / App-Key:", out _txtPasswort);
+            // --- 4. E-Mail Konto ---
+            FügeEingabeZeileSimple(grid, row, "E-Mail-Konto / Benutzer:", out _txtEmailKonto);
+            row++;
+
+            // --- 5. Passwort / App-Key ---
+            FügeEingabeZeileSimple(grid, row, "Passwort / App-Key:", out _txtPasswort);
             row++;
 
             // --- Speichern & Abbrechen Buttons ---
@@ -84,9 +91,9 @@ namespace email_csharp.GUI
             Content = grid;
         }
 
-        private void FügeEingabeZeile(Grid grid, int row, string labelText, out TextBox textBox, bool mitDurchsuchenButton)
+        private void FügeEingabeZeile(Grid grid, int row, string labelText, out TextBox textBox, bool mitDurchsuchenButton, RoutedEventHandler browseHandler)
         {
-            var stack = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+            var stack = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
 
             var lbl = new TextBlock { Text = labelText, FontWeight = FontWeights.Bold, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) };
             stack.Children.Add(lbl);
@@ -96,10 +103,10 @@ namespace email_csharp.GUI
             textBox = new TextBox { Width = mitDurchsuchenButton ? 360 : 480, Height = 28, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4) };
             innerStack.Children.Add(textBox);
 
-            if (mitDurchsuchenButton)
+            if (mitDurchsuchenButton && browseHandler != null)
             {
                 var btnBrowse = new Button { Content = "📂 Durchsuchen", Width = 110, Height = 28, Margin = new Thickness(10, 0, 0, 0) };
-                btnBrowse.Click += (s, e) => WähleOrdnerAus();
+                btnBrowse.Click += browseHandler;
                 innerStack.Children.Add(btnBrowse);
             }
 
@@ -108,38 +115,48 @@ namespace email_csharp.GUI
             grid.Children.Add(stack);
         }
 
-        private void FügeEingabeZeileHinzuEinfach(Grid grid, int row, string labelText, out TextBox textBox)
+        private void FügeEingabeZeileSimple(Grid grid, int row, string labelText, out TextBox textBox)
         {
-            FügeEingabeZeile(grid, row, labelText, out textBox, false);
+            FügeEingabeZeile(grid, row, labelText, out textBox, false, null);
         }
 
-        private void WähleOrdnerAus()
+        private void WähleZielOrdnerAus(object sender, RoutedEventArgs e)
         {
-            var dialog = new Microsoft.Win32.OpenFolderDialog();
-            dialog.Title = "Wähle den Hauptordner für die Firmen-E-Mails aus";
-
-            if (dialog.ShowDialog() == true)
-            {
-                _txtZielOrdner.Text = dialog.FolderName;
-            }
+            var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Wähle den Hauptordner für die Firmen-E-Mails aus" };
+            if (dialog.ShowDialog() == true) { _txtZielOrdner.Text = dialog.FolderName; }
         }
 
-        private void LadeWerteAusEnv()
+        private void WähleUnsortedOrdnerAus(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Wähle den Unsorted-Ordner aus" };
+            if (dialog.ShowDialog() == true) { _txtUnsortedOrdner.Text = dialog.FolderName; }
+        }
+
+        private void LadeWerteAusConfig()
         {
             try
             {
-                if (File.Exists(_envPfad))
+                if (File.Exists(_configPfad))
                 {
-                    Env.Load(_envPfad);
+                    string jsonText = File.ReadAllText(_configPfad);
+                    var config = JsonSerializer.Deserialize<AppConfig>(jsonText);
+                    if (config != null)
+                    {
+                        _txtZielOrdner.Text = config.ZielOrdner ?? AppDomain.CurrentDomain.BaseDirectory;
+                        _txtUnsortedOrdner.Text = config.UnsortedOrdner ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "unsorted");
+                        _txtImapServer.Text = config.ImapServer ?? "";
+                        _txtEmailKonto.Text = config.EmailKonto ?? "";
+                        _txtPasswort.Text = config.Passwort ?? "";
+                        return;
+                    }
                 }
-                _txtZielOrdner.Text = Environment.GetEnvironmentVariable("ZIEL_ORDNER") ?? AppDomain.CurrentDomain.BaseDirectory;
-                _txtImapServer.Text = Environment.GetEnvironmentVariable("IMAP_SERVER") ?? "";
-                _txtEmailKonto.Text = Environment.GetEnvironmentVariable("EMAIL_KONTO") ?? "";
-                _txtPasswort.Text = Environment.GetEnvironmentVariable("PASSWORT") ?? "";
+
+                _txtZielOrdner.Text = AppDomain.CurrentDomain.BaseDirectory;
+                _txtUnsortedOrdner.Text = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "unsorted");
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Fehler beim Laden der .env: " + ex.Message, "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show("Fehler beim Laden der config.json: " + ex.Message, "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -147,21 +164,32 @@ namespace email_csharp.GUI
         {
             try
             {
-                // Wir stellen sicher, dass Backslashes doppelt geschrieben werden, damit sie in der .env nicht als Befehl gelten
-                string saubererPfad = _txtZielOrdner.Text.Trim().Replace("\\", "\\\\");
+                AppConfig config = null;
+                if (File.Exists(_configPfad))
+                {
+                    try
+                    {
+                        string jsonText = File.ReadAllText(_configPfad);
+                        config = JsonSerializer.Deserialize<AppConfig>(jsonText);
+                    }
+                    catch { }
+                }
 
-                var sb = new System.Text.StringBuilder();
-                sb.AppendLine($"ZIEL_ORDNER={saubererPfad}");
-                sb.AppendLine($"IMAP_SERVER={_txtImapServer.Text.Trim()}");
-                sb.AppendLine($"EMAIL_KONTO={_txtEmailKonto.Text.Trim()}");
-                sb.AppendLine($"PASSWORT={_txtPasswort.Text.Trim()}");
-                sb.AppendLine("TAGE_ZURUECK=7");
-                sb.AppendLine("NUR_UNGELESENE=true");
-                sb.AppendLine("DELAY_MILLISEKUNDEN=1000");
+                if (config == null)
+                {
+                    config = new AppConfig { TAGE_ZURUECK = 7, NUR_UNGELESENE = false, DELAY_MILLISEKUNDEN = 1500 };
+                }
 
-                File.WriteAllText(_envPfad, sb.ToString());
+                config.ZielOrdner = _txtZielOrdner.Text.Trim();
+                config.UnsortedOrdner = _txtUnsortedOrdner.Text.Trim();
+                config.ImapServer = _txtImapServer.Text.Trim();
+                config.EmailKonto = _txtEmailKonto.Text.Trim();
+                config.Passwort = _txtPasswort.Text.Trim();
 
-                MessageBox.Show($"Einstellungen erfolgreich gespeichert!\n\nPfad:\n{_envPfad}", "Erfolg", MessageBoxButton.OK, MessageBoxImage.Information);
+                var options = new JsonSerializerOptions { WriteIndented = true };
+                File.WriteAllText(_configPfad, JsonSerializer.Serialize(config, options));
+
+                MessageBox.Show("Einstellungen erfolgreich gespeichert!", "Erfolg", MessageBoxButton.OK, MessageBoxImage.Information);
                 Close();
             }
             catch (Exception ex)

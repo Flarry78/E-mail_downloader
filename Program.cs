@@ -3,7 +3,6 @@
     using System;
     using System.IO;
     using System.Threading.Tasks;
-    using DotNetEnv;
     using Serilog;
 
     class Program
@@ -28,18 +27,18 @@
 
             try
             {
-                // .env-Pfad laden
-                Env.Load();
+                // Konfiguration aus der config.json laden
+                var config = AppConfig.Laden();
 
-                string imapServer = Environment.GetEnvironmentVariable("IMAP_SERVER");
-                string emailKonto = Environment.GetEnvironmentVariable("EMAIL_KONTO");
-                string passwort = Environment.GetEnvironmentVariable("PASSWORT");
-                string zielOrdner = Environment.GetEnvironmentVariable("ZIEL_ORDNER");
+                string imapServer = config.ImapServer;
+                string emailKonto = config.EmailKonto;
+                string passwort = config.Passwort;
+                string zielOrdner = config.ZielOrdner;
 
                 if (string.IsNullOrEmpty(imapServer) || string.IsNullOrEmpty(emailKonto) || string.IsNullOrEmpty(passwort))
                 {
-                    Log.Error("Fehler: Bitte überprüfe deine .env-Datei. Es fehlen Zugangsdaten!");
-                    Console.WriteLine("Fehler: Bitte überprüfe deine .env-Datei. Es fehlen Zugangsdaten!");
+                    Log.Error("Fehler: Bitte überprüfe deine config.json. Es fehlen Zugangsdaten!");
+                    Console.WriteLine("Fehler: Bitte überprüfe deine config.json. Es fehlen Zugangsdaten!");
                     return;
                 }
 
@@ -51,7 +50,7 @@
                 var emailService = new EmailService();
 
                 int port = 993;
-                // E-Mails abrufen (übergibt nun auch den zielOrdner an den Service)
+                // E-Mails abrufen (übergibt den zielOrdner an den Service)
                 var neueEmails = await emailService.FetchNewEmailsAsync(imapServer, port, emailKonto, passwort, zielOrdner);
 
                 Log.Information("Prozess erfolgreich abgeschlossen. {Count} neue E-Mails verarbeitet.", neueEmails.Count);

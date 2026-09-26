@@ -3,6 +3,7 @@
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using System.Security.Cryptography;
     using System.Text;
     using System.Text.Json;
@@ -35,7 +36,6 @@
             {
                 connection.Open();
 
-                // 1. Tabelle für das Firmen-Gedächtnis (Absender -> Firma)
                 string createRulesTable = @"
                 CREATE TABLE IF NOT EXISTS regeln (
                     kennnummer INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,7 +45,6 @@
                     UNIQUE(email_adresse, absender_name)
                 );";
 
-                // 2. Tabelle für die aktuellen Unsorted-E-Mails inklusive Absender-E-Mail
                 string createUnsortedTable = @"
                 CREATE TABLE IF NOT EXISTS unsorted_emails (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +61,7 @@
                     command.ExecuteNonQuery();
                 }
             }
-            Console.WriteLine("[Datenbank] SQLite-Tabellen 'regeln' und 'unsorted_emails' initialisiert.");
+            Console.WriteLine("[Datenbank] SQLite-Tabellen initialisiert.");
         }
 
         private void ErfasseOderPruefeEmail(string emailAdresse, string absenderName)
@@ -88,8 +87,7 @@
             }
         }
 
-        // Speichert eine heruntergeladene E-Mail mit Absender-E-Mail in die DB
-        private void SpeichereUnsortedEmailInDb(string uniqueId, string sender, string senderEmail, string subject, DateTime date, string filePath)
+        private void SpeichereUnsortedEmailInDb(string uniqueId, string sender, string senderEmail, string subject, DateTime date, string ordnerPfad)
         {
             using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
             {
@@ -104,21 +102,20 @@
                     cmd.Parameters.AddWithValue("@sender", sender);
                     cmd.Parameters.AddWithValue("@email", senderEmail);
                     cmd.Parameters.AddWithValue("@subject", subject);
-                    cmd.Parameters.AddWithValue("@date", date.ToString("o")); // ISO-Format für saubere Sortierung
-                    cmd.Parameters.AddWithValue("@path", filePath);
+                    cmd.Parameters.AddWithValue("@date", date.ToString("o"));
+                    cmd.Parameters.AddWithValue("@path", ordnerPfad);
                     cmd.ExecuteNonQuery();
                 }
             }
         }
 
-        // Holt alle unsortierten E-Mails inklusive Absender-E-Mail für die GUI ab
         public List<EmailPreviewModel> GetUnsortedEmailsFromDb()
         {
             var list = new List<EmailPreviewModel>();
             using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
             {
                 connection.Open();
-                string query = "SELECT unique_id, sender, sender_email, subject, date, file_path FROM unsorted_emails ORDER BY date DESC;";
+                string query = "SELECT id, unique_id, sender, sender_email, subject, date, file_path FROM unsorted_emails ORDER BY date DESC;";
 
                 using (var cmd = new SqliteCommand(query, connection))
                 {
@@ -128,18 +125,138 @@
                         {
                             list.Add(new EmailPreviewModel
                             {
-                                UniqueId = reader.GetString(0),
-                                Sender = reader.GetString(1),
-                                SenderEmail = reader.IsDBNull(2) ? "" : reader.GetString(2),
-                                Subject = reader.GetString(3),
-                                Date = DateTime.Parse(reader.GetString(4)),
-                                FilePath = reader.GetString(5)
+                                Id = reader.GetInt32(0),
+                                UniqueId = reader.GetString(1),
+                                Sender = reader.GetString(2),
+                                SenderEmail = reader.IsDBNull(3) ? "" : reader.GetString(3),
+                                Subject = reader.GetString(4),
+                                Date = DateTime.Parse(reader.GetString(5)),
+                                FilePath = reader.GetString(6)
                             });
                         }
                     }
                 }
             }
             return list;
+        }
+
+        public void OrdnerEinsortierenUndLoeschen(int dbId, string uniqueId, string aktuellerOrdnerPfad, string auftragsnummer, string firmenName)
+        {
+            try
+            {
+                var config = AppConfig.Laden();
+                string zielHauptOrdner = config.ZielOrdner;
+
+                if (string.IsNullOrWhiteSpace(zielHauptOrdner))
+                {
+                    throw new Exception("In der Konfiguration ist kein 'ZielOrdner' angegeben!");
+                }
+
+                if (!Directory.Exists(aktuellerOrdnerPfad))
+                {
+                    throw new DirectoryNotFoundException($"Der Quell-Ordner wurde nicht gefunden: {aktuellerOrdnerPfad}");
+                }
+
+                // 1. Bereinigung
+                string saubererFirmenName = string.Join("_", firmenName.Split(Path.GetInvalidFileNameChars()));
+                string saubereAuftragsnummer = string.Join("_", auftragsnummer.Split(Path.GetInvalidFileNameChars()));
+
+                // 2. Hash aus der UniqueId generieren
+                string hash = GenerateShortHash(uniqueId);
+
+                // 3. Firmen-Unterordner im Hauptzielordner definieren (z. B. ...\Ziel\Ebay)
+                string firmenUnterOrdnerPfad = Path.Combine(zielHauptOrdner, saubererFirmenName);
+                Directory.CreateDirectory(firmenUnterOrdnerPfad);
+
+                // 4. Neuen Ordnernamen mit Hash zusammenbauen (z. B. "3333 Ebay a1b2")
+                string neuerOrdnerName = $"{saubereAuftragsnummer} {saubererFirmenName} {hash}";
+                string zielOrdnerPfad = Path.Combine(firmenUnterOrdnerPfad, neuerOrdnerName);
+
+                // Falls dieser genaue Ordnername schon existiert, Zeitstempel anhängen
+                if (Directory.Exists(zielOrdnerPfad))
+                {
+                    zielOrdnerPfad = Path.Combine(firmenUnterOrdnerPfad, $"{neuerOrdnerName}_{DateTime.Now:HHmmss}");
+                }
+
+                // 5. Verschieben und umbenennen
+                Directory.Move(aktuellerOrdnerPfad, zielOrdnerPfad);
+                Console.WriteLine($"[Erfolg] Ordner verschoben nach: {zielOrdnerPfad}");
+
+                // 6. Datenbank-Aktionen sauber nacheinander ausführen
+                using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
+                {
+                    connection.Open();
+
+                    // 6a. Absender-E-Mail dieser Mail aus unsorted_emails holen
+                    string senderEmailToUpdate = "";
+                    string getSenderQuery = "SELECT sender_email FROM unsorted_emails WHERE id = @id;";
+                    using (var getCmd = new SqliteCommand(getSenderQuery, connection))
+                    {
+                        getCmd.Parameters.AddWithValue("@id", dbId);
+                        var result = getCmd.ExecuteScalar();
+                        if (result != null && result != DBNull.Value)
+                        {
+                            senderEmailToUpdate = result.ToString().ToLower().Trim();
+                        }
+                    }
+
+                    // 6b. Firmennamen in 'regeln' für diesen Absender speichern/aktualisieren
+                    if (!string.IsNullOrEmpty(senderEmailToUpdate))
+                    {
+                        string updateRuleQuery = @"
+                        UPDATE regeln 
+                        SET firma_ordner = @firma 
+                        WHERE email_adresse = @email;";
+
+                        using (var updateCmd = new SqliteCommand(updateRuleQuery, connection))
+                        {
+                            updateCmd.Parameters.AddWithValue("@firma", firmenName.Trim());
+                            updateCmd.Parameters.AddWithValue("@email", senderEmailToUpdate);
+                            updateCmd.ExecuteNonQuery();
+                        }
+                        Console.WriteLine($"[Regel-Update] Absender '{senderEmailToUpdate}' fest mit Firmenordner '{firmenName}' verknüpft.");
+                    }
+
+                    // 6c. Aus unsorted_emails löschen
+                    string deleteQuery = "DELETE FROM unsorted_emails WHERE id = @id;";
+                    using (var deleteCmd = new SqliteCommand(deleteQuery, connection))
+                    {
+                        deleteCmd.Parameters.AddWithValue("@id", dbId);
+                        deleteCmd.ExecuteNonQuery();
+                    }
+                }
+                Console.WriteLine($"[Datenbank] Eintrag mit ID {dbId} erfolgreich aus 'unsorted_emails' gelöscht.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Fehler beim Einsortieren]: {ex.Message}");
+                throw;
+            }
+        }
+
+        // NEU: Liest die zugewiesene Firma für eine Absender-E-Mail aus der Datenbank
+        public string HoleGespeicherteFirmaFuerAbsender(string senderEmail)
+        {
+            if (string.IsNullOrWhiteSpace(senderEmail)) return string.Empty;
+
+            string cleanEmail = senderEmail.ToLower().Trim();
+
+            using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
+            {
+                connection.Open();
+                string query = "SELECT firma_ordner FROM regeln WHERE email_adresse = @email AND firma_ordner IS NOT NULL AND firma_ordner != '' LIMIT 1;";
+
+                using (var cmd = new SqliteCommand(query, connection))
+                {
+                    cmd.Parameters.AddWithValue("@email", cleanEmail);
+                    var result = cmd.ExecuteScalar();
+                    if (result != null && result != DBNull.Value)
+                    {
+                        return result.ToString();
+                    }
+                }
+            }
+            return string.Empty;
         }
 
         private void LoadCache()
@@ -154,11 +271,10 @@
                     {
                         _downloadedIds = new HashSet<string>(list);
                     }
-                    Console.WriteLine($"[Cache] {_downloadedIds.Count} bereits bekannte E-Mail-IDs aus JSON geladen.");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[Cache Fehler] Konnte JSON nicht laden: {ex.Message}");
+                    Console.WriteLine($"[Cache Fehler]: {ex.Message}");
                 }
             }
         }
@@ -172,7 +288,7 @@
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Cache Fehler] Konnte JSON nicht speichern: {ex.Message}");
+                Console.WriteLine($"[Cache Fehler]: {ex.Message}");
             }
         }
 
@@ -193,33 +309,24 @@
         public async Task<List<EmailPreviewModel>> FetchNewEmailsAsync(string imapServer, int port, string email, string appPassword, string zielHauptOrdner)
         {
             var newEmails = new List<EmailPreviewModel>();
+            var config = AppConfig.Laden();
 
-            int.TryParse(Environment.GetEnvironmentVariable("TAGE_ZURUECK"), out int tageZurueck);
-            if (tageZurueck <= 0) tageZurueck = 7;
+            int tageZurueck = config.TAGE_ZURUECK > 0 ? config.TAGE_ZURUECK : 7;
+            bool nurUngelesene = config.NUR_UNGELESENE;
+            int delayMs = config.DELAY_MILLISEKUNDEN > 0 ? config.DELAY_MILLISEKUNDEN : 1000;
 
-            bool nurUngelesene = true;
-            if (bool.TryParse(Environment.GetEnvironmentVariable("NUR_UNGELESENE"), out bool parsedBool))
-            {
-                nurUngelesene = parsedBool;
-            }
-
-            int.TryParse(Environment.GetEnvironmentVariable("DELAY_MILLISEKUNDEN"), out int delayMs);
-            if (delayMs <= 0) delayMs = 1000;
-
-            Directory.CreateDirectory(zielHauptOrdner);
-            string unsortedOrdnerPfad = Path.Combine(zielHauptOrdner, "unsorted");
+            string unsortedOrdnerPfad = config.UnsortedOrdner;
             Directory.CreateDirectory(unsortedOrdnerPfad);
 
             using (var client = new ImapClient())
             {
                 try
                 {
-                    Console.WriteLine($"\n[IMAP] Verbinde zu {imapServer}:{port}...");
+                    Console.WriteLine("[IMAP] Verbinde und authentifiziere...");
                     await client.ConnectAsync(imapServer, port, true);
                     await client.AuthenticateAsync(email, appPassword);
                     var inbox = client.Inbox;
                     await inbox.OpenAsync(FolderAccess.ReadWrite);
-                    Console.WriteLine("[IMAP] Posteingang erfolgreich geöffnet.");
 
                     var query = SearchQuery.All;
                     if (nurUngelesene) query = query.And(SearchQuery.NotSeen);
@@ -228,8 +335,9 @@
                         query = query.And(SearchQuery.SentSince(DateTime.Now.AddDays(-tageZurueck)));
                     }
 
+                    Console.WriteLine("[IMAP] Suche nach E-Mails auf dem Server...");
                     var uids = await inbox.SearchAsync(query);
-                    Console.WriteLine($"[Suche] Server hat {uids.Count} passende E-Mails gemeldet.");
+                    Console.WriteLine($"[IMAP] Gefundene E-Mails im Postfach: {uids.Count}");
 
                     int counter = 1;
                     foreach (var uid in uids)
@@ -238,7 +346,7 @@
 
                         if (!_downloadedIds.Contains(uniqueId))
                         {
-                            Console.WriteLine($"\n--- Verarbeite E-Mail {counter} von {uids.Count} (ID: {uniqueId}) ---");
+                            Console.WriteLine($"[Download] Lade E-Mail {counter} von {uids.Count} (UID: {uniqueId})...");
                             var message = await inbox.GetMessageAsync(uid);
 
                             var mailbox = message.From.Mailboxes.FirstOrDefault();
@@ -247,7 +355,6 @@
                             string betreff = message.Subject ?? "Kein Betreff";
                             DateTime datum = message.Date.DateTime;
 
-                            // Absender in die DB eintragen / prüfen
                             ErfasseOderPruefeEmail(absenderEmail, absenderName);
 
                             string datumString = datum.ToString("yyyy-MM-dd_HHmmss");
@@ -256,13 +363,10 @@
 
                             string zielOrdnerPfad = Path.Combine(unsortedOrdnerPfad, ordnerName);
                             Directory.CreateDirectory(zielOrdnerPfad);
-                            Console.WriteLine($"  [Info] Abgelegt unter unsorted/: {absenderName}");
 
-                            // 1. Die .eml-Datei speichern
                             string emlPfad = Path.Combine(zielOrdnerPfad, "email.eml");
                             await message.WriteToAsync(emlPfad);
 
-                            // 2. Anhänge filtern und speichern
                             foreach (var attachment in message.Attachments)
                             {
                                 if (attachment is MimePart mimePart)
@@ -278,13 +382,11 @@
                                             await mimePart.Content.DecodeToAsync(memoryStream);
                                             await File.WriteAllBytesAsync(anhangPfad, memoryStream.ToArray());
                                         }
-                                        Console.WriteLine($"    [Anhang Gespeichert] -> {originalFileName}");
                                     }
                                 }
                             }
 
-                            // 3. Direkt mit Absender-E-Mail in die SQLite-Unsorted-Tabelle schreiben
-                            SpeichereUnsortedEmailInDb(uniqueId, absenderName, absenderEmail, betreff, datum, emlPfad);
+                            SpeichereUnsortedEmailInDb(uniqueId, absenderName, absenderEmail, betreff, datum, zielOrdnerPfad);
 
                             newEmails.Add(new EmailPreviewModel
                             {
@@ -293,15 +395,20 @@
                                 SenderEmail = absenderEmail,
                                 Subject = betreff,
                                 Date = datum,
-                                FilePath = emlPfad
+                                FilePath = zielOrdnerPfad
                             });
 
                             _downloadedIds.Add(uniqueId);
+                            Console.WriteLine($"[Erfolg] E-Mail gespeichert: {betreff}");
 
                             if (delayMs > 0)
                             {
                                 await Task.Delay(delayMs);
                             }
+                        }
+                        else
+                        {
+                            Console.WriteLine($"[Info] E-Mail {counter}/{uids.Count} (UID: {uniqueId}) ist bereits im Cache. Überspringe...");
                         }
                         counter++;
                     }
@@ -312,6 +419,7 @@
                     }
 
                     await client.DisconnectAsync(true);
+                    Console.WriteLine("[IMAP] Verbindung getrennt.");
                 }
                 catch (Exception ex)
                 {
@@ -325,6 +433,7 @@
 
     public class EmailPreviewModel
     {
+        public int Id { get; set; }
         public string UniqueId { get; set; }
         public string Sender { get; set; }
         public string SenderEmail { get; set; }
