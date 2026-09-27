@@ -1,6 +1,7 @@
 ﻿namespace email_csharp.GUI
 {
     using System;
+    using System.Collections.Generic;
     using System.IO;
     using System.Text.Json;
     using System.Windows;
@@ -13,22 +14,29 @@
         private TextBox _txtZielOrdner;
         private TextBox _txtUnsortedOrdner;
         private TextBox _txtImapServer;
+        private TextBox _txtImapPort;
         private TextBox _txtEmailKonto;
         private TextBox _txtPasswort;
+        private TextBox _txtTageZurueck;
+        private CheckBox _chkNurUngelesene;
+        private TextBox _txtDelay;
+
+        private ListView _lvBlockedSenders;
         private string _configPfad;
 
         public SettingsWindow(Window owner)
         {
             Owner = owner;
             Title = "Einstellungen & Optionen";
-            Width = 550;
-            Height = 480;
+            Width = 600;
+            Height = 650; // Höhe angepasst für zusätzliche Felder
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ResizeMode = ResizeMode.NoResize;
 
             ErmittleConfigPfad();
             ErstelleUiLayout();
             LadeWerteAusConfig();
+            LadeBlockierteAbsender();
         }
 
         private void ErmittleConfigPfad()
@@ -43,40 +51,76 @@
 
         private void ErstelleUiLayout()
         {
-            var grid = new Grid { Margin = new Thickness(20) };
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 0: Zielordner
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 1: Unsorted-Ordner
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 2: IMAP
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 3: Konto
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 4: Passwort
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // Spacer
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 5: Buttons
+            var mainGrid = new Grid { Margin = new Thickness(15) };
+            mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // Tabs
+            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Buttons unten
+
+            // TabControl für Reiter-Struktur
+            var tabControl = new TabControl();
+            Grid.SetRow(tabControl, 0);
+
+            // --- REITER 1: Allgemeine Einstellungen ---
+            var tabSettings = new TabItem { Header = "⚙️ Allgemeine Einstellungen" };
+            var gridSettings = new Grid { Margin = new Thickness(15) };
+
+            // 9 Zeilen für alle Konfigurationswerte
+            for (int i = 0; i < 9; i++)
+            {
+                gridSettings.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            }
 
             int row = 0;
+            FügeEingabeZeile(gridSettings, row++, "Haupt-Zielordner (Firmen):", out _txtZielOrdner, true, WähleZielOrdnerAus);
+            FügeEingabeZeile(gridSettings, row++, "Unsorted-Ordner (Eingang):", out _txtUnsortedOrdner, true, WähleUnsortedOrdnerAus);
+            FügeEingabeZeileSimple(gridSettings, row++, "IMAP-Server:", out _txtImapServer);
+            FügeEingabeZeileSimple(gridSettings, row++, "IMAP-Port:", out _txtImapPort);
+            FügeEingabeZeileSimple(gridSettings, row++, "E-Mail-Konto / Benutzer:", out _txtEmailKonto);
+            FügeEingabeZeileSimple(gridSettings, row++, "Passwort / App-Key:", out _txtPasswort);
+            FügeEingabeZeileSimple(gridSettings, row++, "Tage zurück (Abrufzeitraum):", out _txtTageZurueck);
+            FügeEingabeZeileSimple(gridSettings, row++, "Delay zwischen Mails (Millisekunden):", out _txtDelay);
 
-            // --- 1. Haupt-Zielordner ---
-            FügeEingabeZeile(grid, row, "Haupt-Zielordner (Firmen):", out _txtZielOrdner, true, WähleZielOrdnerAus);
-            row++;
+            // Checkbox für NUR_UNGELESENE
+            var stackCheck = new StackPanel { Margin = new Thickness(0, 5, 0, 10) };
+            _chkNurUngelesene = new CheckBox { Content = "Nur ungelesene E-Mails abrufen", FontWeight = FontWeights.Bold, FontSize = 12 };
+            stackCheck.Children.Add(_chkNurUngelesene);
+            Grid.SetRow(stackCheck, row++);
+            gridSettings.Children.Add(stackCheck);
 
-            // --- 2. Unsorted-Ordner ---
-            FügeEingabeZeile(grid, row, "Unsorted-Ordner (Eingang):", out _txtUnsortedOrdner, true, WähleUnsortedOrdnerAus);
-            row++;
+            tabSettings.Content = gridSettings;
+            tabControl.Items.Add(tabSettings);
 
-            // --- 3. IMAP Server ---
-            FügeEingabeZeileSimple(grid, row, "IMAP-Server:", out _txtImapServer);
-            row++;
+            // --- REITER 2: Blacklist / Blockierte Absender ---
+            var tabBlacklist = new TabItem { Header = "🚫 Blockierte Absender (Blacklist)" };
+            var gridBlacklist = new Grid { Margin = new Thickness(15) };
+            gridBlacklist.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            gridBlacklist.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            // --- 4. E-Mail Konto ---
-            FügeEingabeZeileSimple(grid, row, "E-Mail-Konto / Benutzer:", out _txtEmailKonto);
-            row++;
+            _lvBlockedSenders = new ListView
+            {
+                Margin = new Thickness(0, 0, 0, 10),
+                Height = 440
+            };
 
-            // --- 5. Passwort / App-Key ---
-            FügeEingabeZeileSimple(grid, row, "Passwort / App-Key:", out _txtPasswort);
-            row++;
+            var gv = new GridView();
+            gv.Columns.Add(new GridViewColumn { Header = "E-Mail-Adresse", DisplayMemberBinding = new System.Windows.Data.Binding("Email"), Width = 250 });
+            gv.Columns.Add(new GridViewColumn { Header = "Name / Absender", DisplayMemberBinding = new System.Windows.Data.Binding("Name"), Width = 230 });
+            _lvBlockedSenders.View = gv;
+            Grid.SetRow(_lvBlockedSenders, 0);
+            gridBlacklist.Children.Add(_lvBlockedSenders);
 
-            // --- Speichern & Abbrechen Buttons ---
-            var stackButtons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-            Grid.SetRow(stackButtons, 5);
+            var btnUnblock = new Button { Content = "🔓 Ausgewählten Absender entsperren", Width = 240, Height = 30, HorizontalAlignment = HorizontalAlignment.Left };
+            btnUnblock.Click += BtnUnblock_Click;
+            Grid.SetRow(btnUnblock, 1);
+            gridBlacklist.Children.Add(btnUnblock);
+
+            tabBlacklist.Content = gridBlacklist;
+            tabControl.Items.Add(tabBlacklist);
+
+            mainGrid.Children.Add(tabControl);
+
+            // --- Globale Buttons Unten (Speichern / Abbrechen) ---
+            var stackButtons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 15, 0, 0) };
+            Grid.SetRow(stackButtons, 1);
 
             var btnSave = new Button { Content = "💾 Speichern", Width = 110, Height = 32, Background = new SolidColorBrush(Color.FromRgb(40, 167, 69)), Foreground = Brushes.White, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 10, 0) };
             btnSave.Click += (s, e) => SpeichereKonfiguration();
@@ -86,26 +130,26 @@
 
             stackButtons.Children.Add(btnSave);
             stackButtons.Children.Add(btnCancel);
-            grid.Children.Add(stackButtons);
+            mainGrid.Children.Add(stackButtons);
 
-            Content = grid;
+            Content = mainGrid;
         }
 
         private void FügeEingabeZeile(Grid grid, int row, string labelText, out TextBox textBox, bool mitDurchsuchenButton, RoutedEventHandler browseHandler)
         {
-            var stack = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
+            var stack = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
 
-            var lbl = new TextBlock { Text = labelText, FontWeight = FontWeights.Bold, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) };
+            var lbl = new TextBlock { Text = labelText, FontWeight = FontWeights.Bold, FontSize = 12, Margin = new Thickness(0, 0, 0, 2) };
             stack.Children.Add(lbl);
 
             var innerStack = new StackPanel { Orientation = Orientation.Horizontal };
 
-            textBox = new TextBox { Width = mitDurchsuchenButton ? 360 : 480, Height = 28, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4) };
+            textBox = new TextBox { Width = mitDurchsuchenButton ? 380 : 500, Height = 26, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(4) };
             innerStack.Children.Add(textBox);
 
             if (mitDurchsuchenButton && browseHandler != null)
             {
-                var btnBrowse = new Button { Content = "📂 Durchsuchen", Width = 110, Height = 28, Margin = new Thickness(10, 0, 0, 0) };
+                var btnBrowse = new Button { Content = "📂 Durchsuchen", Width = 100, Height = 26, Margin = new Thickness(10, 0, 0, 0) };
                 btnBrowse.Click += browseHandler;
                 innerStack.Children.Add(btnBrowse);
             }
@@ -145,18 +189,62 @@
                         _txtZielOrdner.Text = config.ZielOrdner ?? AppDomain.CurrentDomain.BaseDirectory;
                         _txtUnsortedOrdner.Text = config.UnsortedOrdner ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "unsorted");
                         _txtImapServer.Text = config.ImapServer ?? "";
+                        _txtImapPort.Text = config.ImapPort.ToString();
                         _txtEmailKonto.Text = config.EmailKonto ?? "";
                         _txtPasswort.Text = config.Passwort ?? "";
+                        _txtTageZurueck.Text = config.TAGE_ZURUECK.ToString();
+                        _chkNurUngelesene.IsChecked = config.NUR_UNGELESENE;
+                        _txtDelay.Text = config.DELAY_MILLISEKUNDEN.ToString();
                         return;
                     }
                 }
 
+                // Fallback Standardwerte
                 _txtZielOrdner.Text = AppDomain.CurrentDomain.BaseDirectory;
                 _txtUnsortedOrdner.Text = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "unsorted");
+                _txtImapPort.Text = "993";
+                _txtTageZurueck.Text = "7";
+                _chkNurUngelesene.IsChecked = false;
+                _txtDelay.Text = "1500";
             }
             catch (Exception ex)
             {
                 MessageBox.Show("Fehler beim Laden der config.json: " + ex.Message, "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void LadeBlockierteAbsender()
+        {
+            try
+            {
+                var emailService = new EmailService();
+                var blockierteListe = emailService.HoleBlockierteAbsender();
+                _lvBlockedSenders.ItemsSource = blockierteListe;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[Fehler beim Laden der Blacklist]: " + ex.Message);
+            }
+        }
+
+        private void BtnUnblock_Click(object sender, RoutedEventArgs e)
+        {
+            if (_lvBlockedSenders.SelectedItem is BlockedSenderModel selectedBlocked)
+            {
+                try
+                {
+                    var emailService = new EmailService();
+                    emailService.AbsenderEntsperren(selectedBlocked.Email);
+                    LadeBlockierteAbsender();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Fehler beim Entsperren: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+            else
+            {
+                MessageBox.Show("Bitte wähle zuerst einen Absender aus der Liste aus.", "Hinweis", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
@@ -177,19 +265,31 @@
 
                 if (config == null)
                 {
-                    config = new AppConfig { TAGE_ZURUECK = 7, NUR_UNGELESENE = false, DELAY_MILLISEKUNDEN = 1500 };
+                    config = new AppConfig();
                 }
 
+                // Werte aus UI in das Config-Objekt übertragen (mit robuster Konvertierung)
                 config.ZielOrdner = _txtZielOrdner.Text.Trim();
                 config.UnsortedOrdner = _txtUnsortedOrdner.Text.Trim();
                 config.ImapServer = _txtImapServer.Text.Trim();
+
+                if (int.TryParse(_txtImapPort.Text.Trim(), out int port))
+                    config.ImapPort = port;
+
                 config.EmailKonto = _txtEmailKonto.Text.Trim();
                 config.Passwort = _txtPasswort.Text.Trim();
+
+                if (int.TryParse(_txtTageZurueck.Text.Trim(), out int tage))
+                    config.TAGE_ZURUECK = tage;
+
+                config.NUR_UNGELESENE = _chkNurUngelesene.IsChecked ?? false;
+
+                if (int.TryParse(_txtDelay.Text.Trim(), out int delay))
+                    config.DELAY_MILLISEKUNDEN = delay;
 
                 var options = new JsonSerializerOptions { WriteIndented = true };
                 File.WriteAllText(_configPfad, JsonSerializer.Serialize(config, options));
 
-                MessageBox.Show("Einstellungen erfolgreich gespeichert!", "Erfolg", MessageBoxButton.OK, MessageBoxImage.Information);
                 Close();
             }
             catch (Exception ex)

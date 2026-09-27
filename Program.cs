@@ -9,17 +9,20 @@
     {
         static async Task Main(string[] args)
         {
-            // 1. Serilog Logger konfigurieren (Rotation bei 1 MB, max. 2 Backups im Ordner "logs")
-            string logPfad = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs", "downloader.log");
+            // Absoluten Pfad erzwingen und direkt auf der Konsole ausgeben
+            string basisOrdner = AppDomain.CurrentDomain.BaseDirectory;
+            string logPfad = Path.Combine(basisOrdner, "logs", "downloader.log");
+
+            Console.WriteLine($"[DEBUG] Versuche Log-Datei zu speichern unter: {logPfad}");
 
             Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Information()
                 .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
                 .WriteTo.File(
                     logPfad,
-                    fileSizeLimitBytes: 1_000_000, // 1 MB Limit
-                    rollOnFileSizeLimit: true,     // Bei Erreichen rotieren
-                    retainedFileCountLimit: 2,     // Max. 2 alte Log-Dateien behalten
+                    fileSizeLimitBytes: 1_000_000,
+                    rollOnFileSizeLimit: true,
+                    retainedFileCountLimit: 2,
                     outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
                 .CreateLogger();
 
@@ -42,7 +45,7 @@
                     return;
                 }
 
-                Log.Information("Verbinde mit {Server} für Konto {Konto} mit Zielordner {Ordner}...", imapServer, emailKonto, zielOrdner);
+                Log.Information("Verbinde mit {Server} für Konto {Konto}...", imapServer, emailKonto);
                 Console.WriteLine($"Verbinde mit {imapServer} für Konto {emailKonto}...");
                 Console.WriteLine($"Zielordner: {zielOrdner}");
                 Console.WriteLine(new string('-', 50));
@@ -50,7 +53,7 @@
                 var emailService = new EmailService();
 
                 int port = 993;
-                // E-Mails abrufen (übergibt den zielOrdner an den Service)
+                // E-Mails abrufen
                 var neueEmails = await emailService.FetchNewEmailsAsync(imapServer, port, emailKonto, passwort, zielOrdner);
 
                 Log.Information("Prozess erfolgreich abgeschlossen. {Count} neue E-Mails verarbeitet.", neueEmails.Count);

@@ -8,6 +8,7 @@
     using System.Windows.Controls;
     using System.Windows.Media;
     using MimeKit;
+    using Serilog;
     using email_csharp;
 
     public partial class MainWindow : Window
@@ -16,6 +17,7 @@
 
         public MainWindow()
         {
+            LogInitialisierung.InitLogger();
             InitializeComponent();
             LadeKonfiguration();
 
@@ -41,6 +43,7 @@
             }
             catch (Exception ex)
             {
+                Log.Error(ex, "Fehler beim Laden der config.json: {Message}", ex.Message);
                 MessageBox.Show($"Fehler beim Laden der config.json: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
             }
 
@@ -50,7 +53,56 @@
             }
         }
 
-        // Lädt die unbestätigten E-Mails aus der SQLite-Datenbank in die linke Liste
+        private void BtnShowLogs_Click(object sender, RoutedEventArgs e)
+        {
+            var logWindow = new Window
+            {
+                Title = "Anwendungs-Logs (downloader.log)",
+                Width = 700,
+                Height = 450,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this
+            };
+
+            var textBox = new TextBox
+            {
+                IsReadOnly = true,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
+                Foreground = new SolidColorBrush(Color.FromRgb(0, 255, 128)),
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 12,
+                Padding = new Thickness(5)
+            };
+
+            string logPfad = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs", "downloader.log");
+
+            if (File.Exists(logPfad))
+            {
+                try
+                {
+                    using (var fs = new FileStream(logPfad, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    using (var reader = new StreamReader(fs))
+                    {
+                        textBox.Text = reader.ReadToEnd();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    textBox.Text = $"Fehler beim Lesen der Log-Datei: {ex.Message}";
+                }
+            }
+            else
+            {
+                textBox.Text = $"Keine Log-Datei gefunden unter:\n{logPfad}\n\nEs wurden noch keine Aktionen protokolliert.";
+            }
+
+            logWindow.Content = textBox;
+            logWindow.ShowDialog();
+        }
+
         public void LadeUnsortedEmailsInUi()
         {
             try
@@ -61,11 +113,11 @@
             }
             catch (Exception ex)
             {
+                Log.Error(ex, "Fehler beim Laden der E-Mails aus der Datenbank: {Message}", ex.Message);
                 MessageBox.Show($"Fehler beim Laden der E-Mails aus der Datenbank: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
-        // Liest alle bereits existierenden Firmen-Ordner im Zielordner aus für die Auto-Suggest ComboBox
         private void LadeFirmenOrdnerInComboBox()
         {
             try
@@ -77,7 +129,6 @@
                     foreach (var ordnerPfad in ordner)
                     {
                         var ordnerName = Path.GetFileName(ordnerPfad);
-                        // "unsorted" ignorieren, da das kein Firmenordner ist
                         if (!ordnerName.Equals("unsorted", StringComparison.OrdinalIgnoreCase))
                         {
                             CmbCompany.Items.Add(ordnerName);
@@ -85,21 +136,26 @@
                     }
                 }
             }
-            catch (Exception ex) { Console.WriteLine("Fehler beim Einlesen der Ordner: " + ex.Message); }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Fehler beim Einlesen der Ordner: {Message}", ex.Message);
+            }
         }
 
         private void BtnSettings_Click(object sender, RoutedEventArgs e)
         {
+            Log.Information("Öffne Einstellungen-Fenster.");
             var settingsWin = new SettingsWindow(this);
             settingsWin.ShowDialog();
 
-            // Nach dem Schließen der Einstellungen neu laden (z. B. falls sich der ZIEL_ORDNER geändert hat)
             LadeKonfiguration();
             LadeFirmenOrdnerInComboBox();
         }
 
         private async void BtnStartDownload_Click(object sender, RoutedEventArgs e)
         {
+            Log.Information("📥 Benutzer hat 'E-Mails abrufen' angeklickt.");
+
             string imapServer;
             string emailKonto;
             string passwort;
@@ -116,12 +172,14 @@
             }
             catch (Exception ex)
             {
+                Log.Error(ex, "Fehler beim Laden der config.json beim Download: {Message}", ex.Message);
                 MessageBox.Show($"Fehler beim Laden der config.json: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
 
             if (string.IsNullOrEmpty(imapServer) || string.IsNullOrEmpty(emailKonto) || string.IsNullOrEmpty(passwort))
             {
+                Log.Warning("Download abgebrochen: Zugangsdaten in config.json fehlen.");
                 MessageBox.Show("Bitte überprüfe deine config.json. Zugangsdaten fehlen!", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
@@ -141,10 +199,12 @@
                 var emailService = new EmailService();
                 var neueEmails = await emailService.FetchNewEmailsAsync(imapServer, 993, emailKonto, passwort, unsortedOrdner);
 
+                Log.Information("📥 E-Mail-Download erfolgreich abgeschlossen. {Count} neue E-Mails heruntergeladen.", neueEmails.Count);
                 progressWindow.AppendLog($"\nFertig! {neueEmails.Count} neue E-Mails heruntergeladen.");
             }
             catch (Exception ex)
             {
+                Log.Error(ex, "❌ Fehler beim IMAP-Download: {Message}", ex.Message);
                 progressWindow.AppendLog($"\nFEHLER: {ex.Message}");
             }
             finally
@@ -153,20 +213,16 @@
                 progressWindow.TaskFinished();
             }
 
-            // Nach dem Download die Ansicht aktualisieren
             LadeUnsortedEmailsInUi();
         }
 
-        // Wenn der Chef links eine E-Mail anklickt
         private async void EmailListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (EmailListView.SelectedItem is EmailPreviewModel selectedEmail)
             {
-                // Header-Infos voll ausschreiben
                 TxtSubject.Text = $"Betreff: {selectedEmail.Subject}";
                 TxtSender.Text = $"Absender: {selectedEmail.Sender}  |  Datum: {selectedEmail.Date:dd.MM.yyyy HH:mm}";
 
-                // NEU: Automatisch prüfen, ob für diesen Absender bereits eine Firma in den Regeln hinterlegt ist
                 try
                 {
                     var emailService = new EmailService();
@@ -178,15 +234,14 @@
                     }
                     else
                     {
-                        CmbCompany.Text = string.Empty; // Feld leeren, falls keine Regel existiert
+                        CmbCompany.Text = string.Empty;
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[Fehler beim Laden der Firmenregel]: {ex.Message}");
+                    Log.Error(ex, "Fehler beim Laden der Firmenregel für Absender {SenderEmail}: {Message}", selectedEmail.SenderEmail, ex.Message);
                 }
 
-                // E-Mail Inhalt über WebView2 anzeigen (.eml Datei einlesen via MimeKit)
                 string emlFile = Path.Combine(selectedEmail.FilePath, "email.eml");
                 if (File.Exists(emlFile))
                 {
@@ -197,7 +252,6 @@
 
                         if (string.IsNullOrEmpty(htmlContent))
                         {
-                            // Fallback auf Text, wenn kein HTML vorhanden ist
                             string textContent = message.TextBody ?? "[Kein Textinhalt]";
                             htmlContent = $"<html><body><pre style='font-family:sans-serif;'>{System.Net.WebUtility.HtmlEncode(textContent)}</pre></body></html>";
                         }
@@ -209,13 +263,13 @@
                     }
                     catch (Exception ex)
                     {
+                        Log.Error(ex, "Fehler beim Rendern der E-Mail-Vorschau: {Message}", ex.Message);
                         EmailWebView.CoreWebView2?.NavigateToString($"<html><body><h3>Fehler beim Laden der E-Mail-Vorschau:</h3><p>{ex.Message}</p></body></html>");
                     }
                 }
             }
         }
 
-        // Einsortier-Logik: Verschiebt den gesamten E-Mail-Ordner und löscht den SQLite-Eintrag
         private void BtnAssign_Click(object sender, RoutedEventArgs e)
         {
             if (!(EmailListView.SelectedItem is EmailPreviewModel selectedEmail))
@@ -243,38 +297,126 @@
 
             if (!Directory.Exists(selectedEmail.FilePath))
             {
+                Log.Warning("Einsortieren fehlgeschlagen: Ordner existiert nicht mehr unter {Path}", selectedEmail.FilePath);
                 MessageBox.Show("Der originale E-Mail-Ordner wurde im Dateisystem nicht gefunden.", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
 
             try
             {
-                // Den Service aufrufen (Ordner wird in den Firmenordner verschoben + Hash-Benennung + Regel-Speicherung)
                 var emailService = new EmailService();
                 emailService.OrdnerEinsortierenUndLoeschen(selectedEmail.Id, selectedEmail.UniqueId, selectedEmail.FilePath, auftragsnummer, firma);
 
-                // UI reibungslos im Hintergrund zurücksetzen und aktualisieren
-                LadeUnsortedEmailsInUi();
-                LadeFirmenOrdnerInComboBox();
-                TxtOrderNumber.Clear();
-                CmbCompany.Text = string.Empty;
-                TxtSubject.Text = "Betreff: (Keine E-Mail ausgewählt)";
-                TxtSender.Text = "Absender: -";
-                if (EmailWebView.CoreWebView2 != null)
-                {
-                    EmailWebView.CoreWebView2.NavigateToString("<html><body></body></html>");
-                }
+                Log.Information("🚀 E-Mail erfolgreich einsortiert: Betreff='{Subject}', Absender='{Sender}', Firma/Ordner='{Firma}', Auftragsnummer='{Order}', Quellpfad='{Path}'",
+                    selectedEmail.Subject,
+                    selectedEmail.SenderEmail,
+                    firma,
+                    auftragsnummer,
+                    selectedEmail.FilePath);
+
+                LeereDetailAnsichtUndAktualisiere();
             }
             catch (Exception ex)
             {
+                Log.Error(ex, "❌ Fehler beim Einsortieren der E-Mail (ID: {Id}): {Message}", selectedEmail.Id, ex.Message);
                 MessageBox.Show($"Fehler beim Einsortieren: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
+        private void BtnDeleteOnly_Click(object sender, RoutedEventArgs e)
+        {
+            if (!(EmailListView.SelectedItem is EmailPreviewModel selectedEmail))
+            {
+                MessageBox.Show("Bitte wähle zuerst eine E-Mail aus der Liste aus, die du löschen möchtest.", "Hinweis", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
 
-        // ==========================================
-        // FORTSCHRITTS-FENSTER (POP-UP)
-        // ==========================================
+            var result = MessageBox.Show($"Möchtest du diese E-Mail von '{selectedEmail.Sender}' wirklich unwiderruflich löschen?",
+                "E-Mail löschen", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Yes)
+            {
+                try
+                {
+                    var emailService = new EmailService();
+
+                    if (Directory.Exists(selectedEmail.FilePath))
+                    {
+                        Directory.Delete(selectedEmail.FilePath, true);
+                    }
+
+                    emailService.LoescheUnsortedEintrag(selectedEmail.Id);
+
+                    Log.Information("🗑️ E-Mail gelöscht (ohne Einsortieren): Betreff='{Subject}', Absender='{Sender}', Pfad='{Path}'",
+                        selectedEmail.Subject,
+                        selectedEmail.SenderEmail,
+                        selectedEmail.FilePath);
+
+                    LeereDetailAnsichtUndAktualisiere();
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "❌ Fehler beim Löschen der E-Mail (ID: {Id}): {Message}", selectedEmail.Id, ex.Message);
+                    MessageBox.Show($"Fehler beim Löschen der E-Mail: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+        }
+
+        private void BtnBlockSender_Click(object sender, RoutedEventArgs e)
+        {
+            if (!(EmailListView.SelectedItem is EmailPreviewModel selectedEmail))
+            {
+                MessageBox.Show("Bitte wähle zuerst eine E-Mail aus der Liste aus, deren Absender du blockieren möchtest.", "Hinweis", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var result = MessageBox.Show($"Möchtest du den Absender '{selectedEmail.Sender} ({selectedEmail.SenderEmail})' wirklich auf die Blacklist setzen?\n\nZukünftige E-Mails dieses Absenders werden automatisch übersprungen.",
+                "Absender blockieren", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Yes)
+            {
+                try
+                {
+                    var emailService = new EmailService();
+
+                    emailService.AbsenderBlockieren(selectedEmail.SenderEmail, selectedEmail.Sender);
+
+                    if (Directory.Exists(selectedEmail.FilePath))
+                    {
+                        Directory.Delete(selectedEmail.FilePath, true);
+                    }
+
+                    emailService.LoescheUnsortedEintrag(selectedEmail.Id);
+
+                    Log.Warning("🚫 Absender blockiert und E-Mail entfernt: Absender='{SenderEmail}' ({SenderName}), Betreff='{Subject}'",
+                        selectedEmail.SenderEmail,
+                        selectedEmail.Sender,
+                        selectedEmail.Subject);
+
+                    LeereDetailAnsichtUndAktualisiere();
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "❌ Fehler beim Blockieren des Absenders {SenderEmail}: {Message}", selectedEmail.SenderEmail, ex.Message);
+                    MessageBox.Show($"Fehler beim Blockieren des Absenders: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+        }
+
+        private void LeereDetailAnsichtUndAktualisiere()
+        {
+            LadeUnsortedEmailsInUi();
+            LadeFirmenOrdnerInComboBox();
+            TxtOrderNumber.Clear();
+            CmbCompany.Text = string.Empty;
+            TxtSubject.Text = "Betreff: (Keine E-Mail ausgewählt)";
+            TxtSender.Text = "Absender: -";
+            if (EmailWebView.CoreWebView2 != null)
+            {
+                EmailWebView.CoreWebView2.NavigateToString("<html><body></body></html>");
+            }
+        }
+
         public class ProgressDialog : Window
         {
             public TextBox TxtLog { get; private set; }
@@ -373,10 +515,6 @@
             }
         }
 
-
-        // ==========================================
-        // HILFSKLASSE FÜR KONSOLEN-UMLEITUNG
-        // ==========================================
         public class TextBoxWriter : TextWriter
         {
             private readonly TextBox _outputTextBox;

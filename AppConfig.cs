@@ -39,6 +39,9 @@
         [JsonPropertyName("ImapServer")]
         public string ImapServer { get; set; }
 
+        [JsonPropertyName("ImapPort")]
+        public int ImapPort { get; set; } = 993; // Standard-Port für SSL direkt ergänzt
+
         [JsonPropertyName("EmailKonto")]
         public string EmailKonto { get; set; }
 
@@ -78,7 +81,7 @@
             return new AppConfig();
         }
 
-        // Methode zum Speichern der Einstellungen (falls noch nicht vorhanden)
+        // Methode zum Speichern der Einstellungen
         public void Speichern()
         {
             try

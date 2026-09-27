@@ -89,3 +89,12 @@
 - einstellung für pfad für unsorted ordner hinzugefügt
 - env datei entfernt und nun eine json datei als config datei genommen um werte wie passwort oder pfade zu speichern
 - alle python dateien und scripte entfernt 
+
+
+## 2026-09-27
+
+- log datei gefixt und ins gui eingebaut
+- "Blockieren" und "Löschen" Button eingefügt
+- Blacklist eingefügt
+- beim start wird nun überprüft ob die dateien noch im "unsorted" ordner sind
+- einstellungen erweitert um die config datei zu ändern

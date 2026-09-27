@@ -42,6 +42,7 @@
                     email_adresse TEXT NOT NULL,
                     absender_name TEXT NOT NULL,
                     firma_ordner TEXT,
+                    ist_blockiert INTEGER DEFAULT 0,
                     UNIQUE(email_adresse, absender_name)
                 );";
 
@@ -74,8 +75,8 @@
                 connection.Open();
 
                 string insertQuery = @"
-                INSERT INTO regeln (email_adresse, absender_name, firma_ordner)
-                VALUES (@email, @name, NULL)
+                INSERT INTO regeln (email_adresse, absender_name, firma_ordner, ist_blockiert)
+                VALUES (@email, @name, NULL, 0)
                 ON CONFLICT(email_adresse, absender_name) DO NOTHING;";
 
                 using (var insertCmd = new SqliteCommand(insertQuery, connection))
@@ -86,6 +87,106 @@
                 }
             }
         }
+
+        // --- NEU: Blacklist & Entsperr-Logik ---
+
+        public bool IstAbsenderBlockiert(string senderEmail)
+        {
+            if (string.IsNullOrWhiteSpace(senderEmail)) return false;
+
+            using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
+            {
+                connection.Open();
+                string query = "SELECT ist_blockiert FROM regeln WHERE email_adresse = @email AND ist_blockiert = 1 LIMIT 1;";
+                using (var cmd = new SqliteCommand(query, connection))
+                {
+                    cmd.Parameters.AddWithValue("@email", senderEmail.ToLower().Trim());
+                    var result = cmd.ExecuteScalar();
+                    return result != null && result != DBNull.Value && Convert.ToInt32(result) == 1;
+                }
+            }
+        }
+
+        public void AbsenderBlockieren(string senderEmail, string senderName)
+        {
+            if (string.IsNullOrWhiteSpace(senderEmail)) return;
+
+            string emailClean = senderEmail.ToLower().Trim();
+            string nameClean = string.IsNullOrWhiteSpace(senderName) ? emailClean : senderName.Trim();
+
+            using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
+            {
+                connection.Open();
+                string query = @"
+                INSERT INTO regeln (email_adresse, absender_name, firma_ordner, ist_blockiert)
+                VALUES (@email, @name, NULL, 1)
+                ON CONFLICT(email_adresse, absender_name) DO UPDATE SET ist_blockiert = 1;";
+
+                using (var cmd = new SqliteCommand(query, connection))
+                {
+                    cmd.Parameters.AddWithValue("@email", emailClean);
+                    cmd.Parameters.AddWithValue("@name", nameClean);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        public List<BlockedSenderModel> HoleBlockierteAbsender()
+        {
+            var list = new List<BlockedSenderModel>();
+            using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
+            {
+                connection.Open();
+                string query = "SELECT email_adresse, absender_name FROM regeln WHERE ist_blockiert = 1;";
+                using (var cmd = new SqliteCommand(query, connection))
+                {
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            list.Add(new BlockedSenderModel
+                            {
+                                Email = reader.GetString(0),
+                                Name = reader.IsDBNull(1) ? "" : reader.GetString(1)
+                            });
+                        }
+                    }
+                }
+            }
+            return list;
+        }
+
+        public void AbsenderEntsperren(string senderEmail)
+        {
+            if (string.IsNullOrWhiteSpace(senderEmail)) return;
+
+            using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
+            {
+                connection.Open();
+                string query = "UPDATE regeln SET ist_blockiert = 0 WHERE email_adresse = @email;";
+                using (var cmd = new SqliteCommand(query, connection))
+                {
+                    cmd.Parameters.AddWithValue("@email", senderEmail.ToLower().Trim());
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        public void LoescheUnsortedEintrag(int dbId)
+        {
+            using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
+            {
+                connection.Open();
+                string query = "DELETE FROM unsorted_emails WHERE id = @id;";
+                using (var cmd = new SqliteCommand(query, connection))
+                {
+                    cmd.Parameters.AddWithValue("@id", dbId);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        // --- Ende Blacklist & Entsperr-Logik ---
 
         private void SpeichereUnsortedEmailInDb(string uniqueId, string sender, string senderEmail, string subject, DateTime date, string ordnerPfad)
         {
@@ -128,7 +229,6 @@
                             int id = reader.GetInt32(0);
                             string filePath = reader.GetString(6);
 
-                            // Prüfen, ob der Ordner im Dateisystem noch existiert
                             if (Directory.Exists(filePath))
                             {
                                 list.Add(new EmailPreviewModel
@@ -144,14 +244,12 @@
                             }
                             else
                             {
-                                // Ordner wurde extern gelöscht -> ID zum Aufräumen merken
                                 idsToDelete.Add(id);
                             }
                         }
                     }
                 }
 
-                // Nicht mehr vorhandene Ordner ("Karteileichen") automatisch aus der Datenbank löschen
                 if (idsToDelete.Count > 0)
                 {
                     foreach (var id in idsToDelete)
@@ -162,7 +260,6 @@
                             deleteCmd.Parameters.AddWithValue("@id", id);
                             deleteCmd.ExecuteNonQuery();
                         }
-                        Console.WriteLine($"[Cleanup] Ordner nicht mehr gefunden. SQLite-Eintrag mit ID {id} wurde bereinigt.");
                     }
                 }
             }
@@ -186,37 +283,28 @@
                     throw new DirectoryNotFoundException($"Der Quell-Ordner wurde nicht gefunden: {aktuellerOrdnerPfad}");
                 }
 
-                // 1. Bereinigung
                 string saubererFirmenName = string.Join("_", firmenName.Split(Path.GetInvalidFileNameChars()));
                 string saubereAuftragsnummer = string.Join("_", auftragsnummer.Split(Path.GetInvalidFileNameChars()));
 
-                // 2. Hash aus der UniqueId generieren
                 string hash = GenerateShortHash(uniqueId);
 
-                // 3. Firmen-Unterordner im Hauptzielordner definieren (z. B. ...\Ziel\Ebay)
                 string firmenUnterOrdnerPfad = Path.Combine(zielHauptOrdner, saubererFirmenName);
                 Directory.CreateDirectory(firmenUnterOrdnerPfad);
 
-                // 4. Neuen Ordnernamen mit Hash zusammenbauen (z. B. "3333 Ebay a1b2")
                 string neuerOrdnerName = $"{saubereAuftragsnummer} {saubererFirmenName} {hash}";
                 string zielOrdnerPfad = Path.Combine(firmenUnterOrdnerPfad, neuerOrdnerName);
 
-                // Falls dieser genaue Ordnername schon existiert, Zeitstempel anhängen
                 if (Directory.Exists(zielOrdnerPfad))
                 {
                     zielOrdnerPfad = Path.Combine(firmenUnterOrdnerPfad, $"{neuerOrdnerName}_{DateTime.Now:HHmmss}");
                 }
 
-                // 5. Verschieben und umbenennen
                 Directory.Move(aktuellerOrdnerPfad, zielOrdnerPfad);
-                Console.WriteLine($"[Erfolg] Ordner verschoben nach: {zielOrdnerPfad}");
 
-                // 6. Datenbank-Aktionen sauber nacheinander ausführen
                 using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
                 {
                     connection.Open();
 
-                    // 6a. Absender-E-Mail dieser Mail aus unsorted_emails holen
                     string senderEmailToUpdate = "";
                     string getSenderQuery = "SELECT sender_email FROM unsorted_emails WHERE id = @id;";
                     using (var getCmd = new SqliteCommand(getSenderQuery, connection))
@@ -229,7 +317,6 @@
                         }
                     }
 
-                    // 6b. Firmennamen in 'regeln' für diesen Absender speichern/aktualisieren
                     if (!string.IsNullOrEmpty(senderEmailToUpdate))
                     {
                         string updateRuleQuery = @"
@@ -243,10 +330,8 @@
                             updateCmd.Parameters.AddWithValue("@email", senderEmailToUpdate);
                             updateCmd.ExecuteNonQuery();
                         }
-                        Console.WriteLine($"[Regel-Update] Absender '{senderEmailToUpdate}' fest mit Firmenordner '{firmenName}' verknüpft.");
                     }
 
-                    // 6c. Aus unsorted_emails löschen
                     string deleteQuery = "DELETE FROM unsorted_emails WHERE id = @id;";
                     using (var deleteCmd = new SqliteCommand(deleteQuery, connection))
                     {
@@ -254,7 +339,6 @@
                         deleteCmd.ExecuteNonQuery();
                     }
                 }
-                Console.WriteLine($"[Datenbank] Eintrag mit ID {dbId} erfolgreich aus 'unsorted_emails' gelöscht.");
             }
             catch (Exception ex)
             {
@@ -263,7 +347,6 @@
             }
         }
 
-        // NEU: Liest die zugewiesene Firma für eine Absender-E-Mail aus der Datenbank
         public string HoleGespeicherteFirmaFuerAbsender(string senderEmail)
         {
             if (string.IsNullOrWhiteSpace(senderEmail)) return string.Empty;
@@ -375,12 +458,36 @@
 
                         if (!_downloadedIds.Contains(uniqueId))
                         {
+                            var summary = await inbox.FetchAsync(new[] { uid }, MessageSummaryItems.Envelope);
+                            var envelope = summary.FirstOrDefault()?.Envelope;
+
+                            string absenderEmail = envelope?.Sender.Mailboxes.FirstOrDefault()?.Address
+                                                   ?? envelope?.From.Mailboxes.FirstOrDefault()?.Address
+                                                   ?? string.Empty;
+
+                            if (!string.IsNullOrEmpty(absenderEmail) && IstAbsenderBlockiert(absenderEmail))
+                            {
+                                Console.WriteLine($"[Blacklist] Überspringe blockierten Absender: {absenderEmail} (UID: {uniqueId})");
+                                _downloadedIds.Add(uniqueId);
+                                counter++;
+                                continue;
+                            }
+
                             Console.WriteLine($"[Download] Lade E-Mail {counter} von {uids.Count} (UID: {uniqueId})...");
                             var message = await inbox.GetMessageAsync(uid);
 
+                            // --- KORRIGIERTE LOGIK FÜR ABSENDER & E-MAIL ---
                             var mailbox = message.From.Mailboxes.FirstOrDefault();
-                            string absenderName = mailbox?.Name ?? message.From.ToString();
-                            string absenderEmail = mailbox?.Address ?? message.From.ToString();
+
+                            // Die echte E-Mail-Adresse sauber auslesen
+                            absenderEmail = mailbox?.Address ?? message.From.ToString();
+
+                            // Wenn kein Name existiert, wird stattdessen die E-Mail-Adresse als Absender eingetragen
+                            string absenderName = !string.IsNullOrWhiteSpace(mailbox?.Name)
+                                ? mailbox.Name.Trim()
+                                : absenderEmail;
+                            // ----------------------------------------------
+
                             string betreff = message.Subject ?? "Kein Betreff";
                             DateTime datum = message.Date.DateTime;
 
@@ -428,7 +535,7 @@
                             });
 
                             _downloadedIds.Add(uniqueId);
-                            Console.WriteLine($"[Erfolg] E-Mail gespeichert: {betreff}");
+                            Console.WriteLine($"[Erfolg] E-Mail gespeichert.\n");
 
                             if (delayMs > 0)
                             {
@@ -459,6 +566,7 @@
             return newEmails;
         }
     }
+    
 
     public class EmailPreviewModel
     {
@@ -469,5 +577,11 @@
         public string Subject { get; set; }
         public DateTime Date { get; set; }
         public string FilePath { get; set; }
+    }
+
+    public class BlockedSenderModel
+    {
+        public string Email { get; set; }
+        public string Name { get; set; }
     }
 }
