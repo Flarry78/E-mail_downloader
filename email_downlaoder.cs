@@ -112,6 +112,8 @@
         public List<EmailPreviewModel> GetUnsortedEmailsFromDb()
         {
             var list = new List<EmailPreviewModel>();
+            var idsToDelete = new List<int>();
+
             using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
             {
                 connection.Open();
@@ -123,17 +125,44 @@
                     {
                         while (reader.Read())
                         {
-                            list.Add(new EmailPreviewModel
+                            int id = reader.GetInt32(0);
+                            string filePath = reader.GetString(6);
+
+                            // Prüfen, ob der Ordner im Dateisystem noch existiert
+                            if (Directory.Exists(filePath))
                             {
-                                Id = reader.GetInt32(0),
-                                UniqueId = reader.GetString(1),
-                                Sender = reader.GetString(2),
-                                SenderEmail = reader.IsDBNull(3) ? "" : reader.GetString(3),
-                                Subject = reader.GetString(4),
-                                Date = DateTime.Parse(reader.GetString(5)),
-                                FilePath = reader.GetString(6)
-                            });
+                                list.Add(new EmailPreviewModel
+                                {
+                                    Id = id,
+                                    UniqueId = reader.GetString(1),
+                                    Sender = reader.GetString(2),
+                                    SenderEmail = reader.IsDBNull(3) ? "" : reader.GetString(3),
+                                    Subject = reader.GetString(4),
+                                    Date = DateTime.Parse(reader.GetString(5)),
+                                    FilePath = filePath
+                                });
+                            }
+                            else
+                            {
+                                // Ordner wurde extern gelöscht -> ID zum Aufräumen merken
+                                idsToDelete.Add(id);
+                            }
                         }
+                    }
+                }
+
+                // Nicht mehr vorhandene Ordner ("Karteileichen") automatisch aus der Datenbank löschen
+                if (idsToDelete.Count > 0)
+                {
+                    foreach (var id in idsToDelete)
+                    {
+                        string deleteQuery = "DELETE FROM unsorted_emails WHERE id = @id;";
+                        using (var deleteCmd = new SqliteCommand(deleteQuery, connection))
+                        {
+                            deleteCmd.Parameters.AddWithValue("@id", id);
+                            deleteCmd.ExecuteNonQuery();
+                        }
+                        Console.WriteLine($"[Cleanup] Ordner nicht mehr gefunden. SQLite-Eintrag mit ID {id} wurde bereinigt.");
                     }
                 }
             }

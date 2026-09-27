@@ -80,3 +80,12 @@
 - einstellungen in der gui möglich (imap passwort, zielpfad ändern, email etc)
 - 2 sql datenbanken zum permanenten und flüchtigem speichern der emails
 - folder werden gescannt und als name im dropdown vorgeschlagen
+
+
+## 2026-09-26
+
+- firmen name werden zur jeweiligen email in der sql datei gespeichert und in der gui dann bereits vor eingegeben
+- ordner werden umbenannt und verschoben, flüchtige sql daten werden entfernt
+- einstellung für pfad für unsorted ordner hinzugefügt
+- env datei entfernt und nun eine json datei als config datei genommen um werte wie passwort oder pfade zu speichern
+- alle python dateien und scripte entfernt 
