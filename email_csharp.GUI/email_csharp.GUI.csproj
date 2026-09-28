@@ -13,7 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\email_csharp\email_csharp.csproj" />
+    <ProjectReference Include="..\E-mail_downloader\email_csharp.csproj" />
   </ItemGroup>
 
 </Project>

@@ -88,8 +88,6 @@
             }
         }
 
-        // --- NEU: Blacklist & Entsperr-Logik ---
-
         public bool IstAbsenderBlockiert(string senderEmail)
         {
             if (string.IsNullOrWhiteSpace(senderEmail)) return false;
@@ -186,8 +184,6 @@
             }
         }
 
-        // --- Ende Blacklist & Entsperr-Logik ---
-
         private void SpeichereUnsortedEmailInDb(string uniqueId, string sender, string senderEmail, string subject, DateTime date, string ordnerPfad)
         {
             using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
@@ -231,6 +227,13 @@
 
                             if (Directory.Exists(filePath))
                             {
+                                // Anhänge direkt aus dem Ordner ermitteln (ohne email.eml)
+                                var alleDateien = Directory.GetFiles(filePath);
+                                var anhaenge = alleDateien
+                                    .Select(Path.GetFileName)
+                                    .Where(f => !f.Equals("email.eml", StringComparison.OrdinalIgnoreCase))
+                                    .ToList();
+
                                 list.Add(new EmailPreviewModel
                                 {
                                     Id = id,
@@ -239,7 +242,8 @@
                                     SenderEmail = reader.IsDBNull(3) ? "" : reader.GetString(3),
                                     Subject = reader.GetString(4),
                                     Date = DateTime.Parse(reader.GetString(5)),
-                                    FilePath = filePath
+                                    FilePath = filePath,
+                                    Attachments = anhaenge
                                 });
                             }
                             else
@@ -476,17 +480,12 @@
                             Console.WriteLine($"[Download] Lade E-Mail {counter} von {uids.Count} (UID: {uniqueId})...");
                             var message = await inbox.GetMessageAsync(uid);
 
-                            // --- KORRIGIERTE LOGIK FÜR ABSENDER & E-MAIL ---
                             var mailbox = message.From.Mailboxes.FirstOrDefault();
-
-                            // Die echte E-Mail-Adresse sauber auslesen
                             absenderEmail = mailbox?.Address ?? message.From.ToString();
 
-                            // Wenn kein Name existiert, wird stattdessen die E-Mail-Adresse als Absender eingetragen
                             string absenderName = !string.IsNullOrWhiteSpace(mailbox?.Name)
                                 ? mailbox.Name.Trim()
                                 : absenderEmail;
-                            // ----------------------------------------------
 
                             string betreff = message.Subject ?? "Kein Betreff";
                             DateTime datum = message.Date.DateTime;
@@ -503,6 +502,8 @@
                             string emlPfad = Path.Combine(zielOrdnerPfad, "email.eml");
                             await message.WriteToAsync(emlPfad);
 
+                            var anhaengeNamen = new List<string>();
+
                             foreach (var attachment in message.Attachments)
                             {
                                 if (attachment is MimePart mimePart)
@@ -512,6 +513,7 @@
                                     {
                                         string originalFileName = mimePart.FileName ?? "unbenannt.dat";
                                         string anhangPfad = Path.Combine(zielOrdnerPfad, originalFileName);
+                                        anhaengeNamen.Add(originalFileName);
 
                                         using (var memoryStream = new MemoryStream())
                                         {
@@ -531,7 +533,8 @@
                                 SenderEmail = absenderEmail,
                                 Subject = betreff,
                                 Date = datum,
-                                FilePath = zielOrdnerPfad
+                                FilePath = zielOrdnerPfad,
+                                Attachments = anhaengeNamen // Anhänge für die Vorschau übergeben
                             });
 
                             _downloadedIds.Add(uniqueId);
@@ -566,7 +569,6 @@
             return newEmails;
         }
     }
-    
 
     public class EmailPreviewModel
     {
@@ -577,6 +579,7 @@
         public string Subject { get; set; }
         public DateTime Date { get; set; }
         public string FilePath { get; set; }
+        public List<string> Attachments { get; set; } = new List<string>(); // NEU
     }
 
     public class BlockedSenderModel

@@ -1,11 +1,14 @@
 ﻿namespace email_csharp.GUI
 {
     using System;
+    using System.Collections.Generic;
+    using System.Diagnostics;
     using System.IO;
     using System.Text;
     using System.Threading.Tasks;
     using System.Windows;
     using System.Windows.Controls;
+    using System.Windows.Input;
     using System.Windows.Media;
     using MimeKit;
     using Serilog;
@@ -109,6 +112,25 @@
             {
                 var emailService = new EmailService();
                 var unsortedList = emailService.GetUnsortedEmailsFromDb();
+
+                // Anhänge direkt für jede E-Mail im Dateisystem einsammeln, damit die Badges in der Linken Liste erscheinen
+                foreach (var email in unsortedList)
+                {
+                    email.Attachments = new List<string>();
+                    if (!string.IsNullOrEmpty(email.FilePath) && Directory.Exists(email.FilePath))
+                    {
+                        var dateien = Directory.GetFiles(email.FilePath);
+                        foreach (var datei in dateien)
+                        {
+                            string fileName = Path.GetFileName(datei);
+                            if (!fileName.Equals("email.eml", StringComparison.OrdinalIgnoreCase))
+                            {
+                                email.Attachments.Add(fileName);
+                            }
+                        }
+                    }
+                }
+
                 EmailListView.ItemsSource = unsortedList;
             }
             catch (Exception ex)
@@ -216,12 +238,47 @@
             LadeUnsortedEmailsInUi();
         }
 
+        private void Attachment_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            // Öffnet den Anhang direkt bei einem Doppelklick (oder hier direkt, was sich oft flüssiger anfühlt)
+            if (e.ClickCount == 2)
+            {
+                if (sender is FrameworkElement element && element.DataContext is string selectedFileName)
+                {
+                    if (EmailListView.SelectedItem is EmailPreviewModel selectedEmail)
+                    {
+                        string fullPath = Path.Combine(selectedEmail.FilePath, selectedFileName);
+
+                        if (File.Exists(fullPath))
+                        {
+                            try
+                            {
+                                Process.Start(new ProcessStartInfo(fullPath) { UseShellExecute = true });
+                                Log.Information("Anhang geöffnet: {Path}", fullPath);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Error(ex, "Fehler beim Öffnen des Anhangs {File}: {Message}", selectedFileName, ex.Message);
+                                MessageBox.Show($"Fehler beim Öffnen der Datei: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                            }
+                        }
+                        else
+                        {
+                            MessageBox.Show("Die Datei wurde im Dateisystem nicht gefunden.", "Nicht gefunden", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        }
+                    }
+                }
+            }
+        }
+
         private async void EmailListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (EmailListView.SelectedItem is EmailPreviewModel selectedEmail)
             {
                 TxtSubject.Text = $"Betreff: {selectedEmail.Subject}";
                 TxtSender.Text = $"Absender: {selectedEmail.Sender}  |  Datum: {selectedEmail.Date:dd.MM.yyyy HH:mm}";
+
+                // (Die untere Anhangs-Listbox `LbAttachments` ist weggefallen, daher wird sie hier nicht mehr befüllt)
 
                 try
                 {
@@ -261,12 +318,10 @@
                                     byte[] bytes = memoryStream.ToArray();
                                     string base64Data = Convert.ToBase64String(bytes);
 
-                                    // Ermittle den MimeType (z.B. image/png, image/jpeg)
                                     string mimeType = mimePart.ContentType.MimeType ?? "image/png";
 
                                     if (!string.IsNullOrEmpty(htmlContent))
                                     {
-                                        // Ersetze die CID direkt durch den Base64-Data-String im HTML
                                         htmlContent = htmlContent.Replace($"cid:{mimePart.ContentId}", $"data:{mimeType};base64,{base64Data}");
                                     }
                                 }
@@ -280,7 +335,6 @@
                         }
                         else
                         {
-                            // SCHUTZ VOR SCHWARZEM HINTERGRUND IM DARK MODE:
                             if (!htmlContent.Contains("background-color") && !htmlContent.Contains("background:"))
                             {
                                 htmlContent = "<html><head><style>body { background-color: #ffffff !important; color: #000000 !important; }</style></head><body>" + htmlContent + "</body></html>";
@@ -289,7 +343,6 @@
 
                         if (EmailWebView.CoreWebView2 != null)
                         {
-                            // Virtuellen Host für WebView2 mappen, damit eingebettete Bilder geladen werden können
                             EmailWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
                                 "emailassets.local",
                                 selectedEmail.FilePath,
