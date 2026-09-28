@@ -248,16 +248,53 @@
                     try
                     {
                         var message = await MimeMessage.LoadAsync(emlFile);
+
                         string htmlContent = message.HtmlBody;
+
+                        foreach (var part in message.BodyParts)
+                        {
+                            if (part is MimePart mimePart && !string.IsNullOrEmpty(mimePart.ContentId))
+                            {
+                                using (var memoryStream = new MemoryStream())
+                                {
+                                    mimePart.Content.DecodeTo(memoryStream);
+                                    byte[] bytes = memoryStream.ToArray();
+                                    string base64Data = Convert.ToBase64String(bytes);
+
+                                    // Ermittle den MimeType (z.B. image/png, image/jpeg)
+                                    string mimeType = mimePart.ContentType.MimeType ?? "image/png";
+
+                                    if (!string.IsNullOrEmpty(htmlContent))
+                                    {
+                                        // Ersetze die CID direkt durch den Base64-Data-String im HTML
+                                        htmlContent = htmlContent.Replace($"cid:{mimePart.ContentId}", $"data:{mimeType};base64,{base64Data}");
+                                    }
+                                }
+                            }
+                        }
 
                         if (string.IsNullOrEmpty(htmlContent))
                         {
                             string textContent = message.TextBody ?? "[Kein Textinhalt]";
                             htmlContent = $"<html><body><pre style='font-family:sans-serif;'>{System.Net.WebUtility.HtmlEncode(textContent)}</pre></body></html>";
                         }
+                        else
+                        {
+                            // SCHUTZ VOR SCHWARZEM HINTERGRUND IM DARK MODE:
+                            if (!htmlContent.Contains("background-color") && !htmlContent.Contains("background:"))
+                            {
+                                htmlContent = "<html><head><style>body { background-color: #ffffff !important; color: #000000 !important; }</style></head><body>" + htmlContent + "</body></html>";
+                            }
+                        }
 
                         if (EmailWebView.CoreWebView2 != null)
                         {
+                            // Virtuellen Host für WebView2 mappen, damit eingebettete Bilder geladen werden können
+                            EmailWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                                "emailassets.local",
+                                selectedEmail.FilePath,
+                                Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow);
+
                             EmailWebView.CoreWebView2.NavigateToString(htmlContent);
                         }
                     }
