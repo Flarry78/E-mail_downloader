@@ -56,6 +56,27 @@
             }
         }
 
+        /// <summary>
+        /// Löst die WebView2-Ordnerzuordnung und leert die Vorschau, damit der
+        /// E-Mail-Ordner nicht gesperrt ist, wenn er verschoben oder gelöscht wird.
+        /// </summary>
+        private void GibVorschauFrei()
+        {
+            if (EmailWebView.CoreWebView2 != null)
+            {
+                try
+                {
+                    EmailWebView.CoreWebView2.ClearVirtualHostNameToFolderMapping("emailassets.local");
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Konnte WebView2-Ordnerzuordnung nicht lösen: {Message}", ex.Message);
+                }
+
+                EmailWebView.CoreWebView2.NavigateToString("<html><body></body></html>");
+            }
+        }
+
         private void BtnShowLogs_Click(object sender, RoutedEventArgs e)
         {
             var logWindow = new Window
@@ -240,7 +261,7 @@
 
         private void Attachment_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            // Öffnet den Anhang direkt bei einem Doppelklick (oder hier direkt, was sich oft flüssiger anfühlt)
+            // Öffnet den Anhang direkt bei einem Doppelklick
             if (e.ClickCount == 2)
             {
                 if (sender is FrameworkElement element && element.DataContext is string selectedFileName)
@@ -277,8 +298,6 @@
             {
                 TxtSubject.Text = $"Betreff: {selectedEmail.Subject}";
                 TxtSender.Text = $"Absender: {selectedEmail.Sender}  |  Datum: {selectedEmail.Date:dd.MM.yyyy HH:mm}";
-
-                // (Die untere Anhangs-Listbox `LbAttachments` ist weggefallen, daher wird sie hier nicht mehr befüllt)
 
                 try
                 {
@@ -394,6 +413,8 @@
 
             try
             {
+                GibVorschauFrei();
+
                 var emailService = new EmailService();
                 emailService.OrdnerEinsortierenUndLoeschen(selectedEmail.Id, selectedEmail.UniqueId, selectedEmail.FilePath, auftragsnummer, firma);
 
@@ -413,6 +434,53 @@
             }
         }
 
+        // NEU: E-Mail in den Archiv-Ordner ablegen (umbenannt nach Absender + Hash)
+        private void BtnArchive_Click(object sender, RoutedEventArgs e)
+        {
+            if (!(EmailListView.SelectedItem is EmailPreviewModel selectedEmail))
+            {
+                MessageBox.Show("Bitte wähle zuerst eine E-Mail aus der Liste aus.", "Hinweis", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            if (!Directory.Exists(selectedEmail.FilePath))
+            {
+                Log.Warning("Ablegen fehlgeschlagen: Ordner existiert nicht mehr unter {Path}", selectedEmail.FilePath);
+                MessageBox.Show("Der originale E-Mail-Ordner wurde im Dateisystem nicht gefunden.", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            var confirmResult = MessageBox.Show(
+                $"Möchtest du die E-Mail von '{selectedEmail.Sender}' wirklich in den Archiv-Ordner ablegen?\n\nSie wird ohne Firmenzuordnung und Auftragsnummer aus der Liste entfernt.",
+                "E-Mail ablegen", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+            if (confirmResult != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            try
+            {
+                GibVorschauFrei();
+
+                var emailService = new EmailService();
+                string ziel = emailService.OrdnerInArchivVerschieben(
+                    selectedEmail.Id, selectedEmail.UniqueId, selectedEmail.FilePath, selectedEmail.Sender);
+
+                Log.Information("📦 E-Mail abgelegt: Betreff='{Subject}', Absender='{Sender}', Ziel='{Ziel}'",
+                    selectedEmail.Subject,
+                    selectedEmail.SenderEmail,
+                    ziel);
+
+                LeereDetailAnsichtUndAktualisiere();
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "❌ Fehler beim Ablegen der E-Mail (ID: {Id}): {Message}", selectedEmail.Id, ex.Message);
+                MessageBox.Show($"Fehler beim Ablegen: {ex.Message}", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
         private void BtnDeleteOnly_Click(object sender, RoutedEventArgs e)
         {
             if (!(EmailListView.SelectedItem is EmailPreviewModel selectedEmail))
@@ -428,6 +496,8 @@
             {
                 try
                 {
+                    GibVorschauFrei();
+
                     var emailService = new EmailService();
 
                     if (Directory.Exists(selectedEmail.FilePath))
@@ -467,6 +537,8 @@
             {
                 try
                 {
+                    GibVorschauFrei();
+
                     var emailService = new EmailService();
 
                     emailService.AbsenderBlockieren(selectedEmail.SenderEmail, selectedEmail.Sender);

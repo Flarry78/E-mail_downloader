@@ -92,8 +92,11 @@
                             <TextBlock x:Name="TxtSender" Text="Absender: -" FontSize="12" Foreground="#FF555555" TextWrapping="Wrap"/>
                         </StackPanel>
 
-                        <!-- Rechte obere Ecke: Einstellungen & Logs anzeigen -->
+                        <!-- Rechte obere Ecke: Ablegen (abseits der Aktionsbuttons) sowie Einstellungen & Logs -->
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                            <!-- NEU: Ablegen im Archiv-Ordner, bewusst von Einsortieren/Blockieren/Löschen getrennt -->
+                            <Button x:Name="BtnArchive" Content="📦 Ablegen" Width="95" Height="30" Margin="0,0,24,0"
+                                    Background="#FF17A2B8" Foreground="White" FontWeight="Bold" Click="BtnArchive_Click"/>
                             <Button x:Name="BtnSettings" Content="⚙️ Einstellungen" Width="110" Height="30" Margin="0,0,8,0"
                                     Background="#FFE0E0E0" Foreground="#FF333333" FontWeight="Bold" Click="BtnSettings_Click"/>
                             <Button Content="📜 Logs" Width="90" Height="30" Click="BtnShowLogs_Click" FontWeight="Bold"
@@ -121,7 +124,7 @@
                             <ComboBox x:Name="CmbCompany" IsEditable="True" Height="28" VerticalContentAlignment="Center"/>
                         </StackPanel>
 
-                        <!-- Buttons rechts (Einsortieren, Blockieren & Löschen) -->
+                        <!-- Buttons rechts (Einsortieren, Ablegen, Blockieren & Löschen) -->
                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom">
                             <Button x:Name="BtnAssign" Content="🚀 Einsortieren" Width="110" Height="28" Margin="0,0,6,0"
                                     Background="#FF28A745" Foreground="White" FontWeight="Bold" Click="BtnAssign_Click"/>

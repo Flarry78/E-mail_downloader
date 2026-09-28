@@ -36,6 +36,10 @@
             }
         }
 
+        // NEU: Ordner für E-Mails, die weder einsortiert noch gelöscht/blockiert werden sollen
+        [JsonPropertyName("ArchivOrdner")]
+        public string ArchivOrdner { get; set; }
+
         [JsonPropertyName("ImapServer")]
         public string ImapServer { get; set; }
 

@@ -98,3 +98,10 @@
 - Blacklist eingefügt
 - beim start wird nun überprüft ob die dateien noch im "unsorted" ordner sind
 - einstellungen erweitert um die config datei zu ändern
+
+
+## 2026-09-28
+
+- ablegen button hinzugefügt damit man emails die nicht zu firmen gehören aber man auch nicht löschen will verschieben kann
+- anhänge werden jetzt unter dem absender angezeigt und können mit einem doppelklick angesehen werden
+- bilder werden richtig in der eml angezeigt

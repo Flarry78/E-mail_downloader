@@ -13,6 +13,7 @@
     {
         private TextBox _txtZielOrdner;
         private TextBox _txtUnsortedOrdner;
+        private TextBox _txtArchivOrdner; // NEU
         private TextBox _txtImapServer;
         private TextBox _txtImapPort;
         private TextBox _txtEmailKonto;
@@ -29,7 +30,7 @@
             Owner = owner;
             Title = "Einstellungen & Optionen";
             Width = 600;
-            Height = 650; // Höhe angepasst für zusätzliche Felder
+            Height = 700; // Höhe angepasst für zusätzliches Feld
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ResizeMode = ResizeMode.NoResize;
 
@@ -63,8 +64,8 @@
             var tabSettings = new TabItem { Header = "⚙️ Allgemeine Einstellungen" };
             var gridSettings = new Grid { Margin = new Thickness(15) };
 
-            // 9 Zeilen für alle Konfigurationswerte
-            for (int i = 0; i < 9; i++)
+            // 10 Zeilen für alle Konfigurationswerte
+            for (int i = 0; i < 10; i++)
             {
                 gridSettings.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             }
@@ -72,6 +73,7 @@
             int row = 0;
             FügeEingabeZeile(gridSettings, row++, "Haupt-Zielordner (Firmen):", out _txtZielOrdner, true, WähleZielOrdnerAus);
             FügeEingabeZeile(gridSettings, row++, "Unsorted-Ordner (Eingang):", out _txtUnsortedOrdner, true, WähleUnsortedOrdnerAus);
+            FügeEingabeZeile(gridSettings, row++, "Archiv-Ordner (Ablegen):", out _txtArchivOrdner, true, WähleArchivOrdnerAus); // NEU
             FügeEingabeZeileSimple(gridSettings, row++, "IMAP-Server:", out _txtImapServer);
             FügeEingabeZeileSimple(gridSettings, row++, "IMAP-Port:", out _txtImapPort);
             FügeEingabeZeileSimple(gridSettings, row++, "E-Mail-Konto / Benutzer:", out _txtEmailKonto);
@@ -176,6 +178,13 @@
             if (dialog.ShowDialog() == true) { _txtUnsortedOrdner.Text = dialog.FolderName; }
         }
 
+        // NEU
+        private void WähleArchivOrdnerAus(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Wähle den Archiv-Ordner aus" };
+            if (dialog.ShowDialog() == true) { _txtArchivOrdner.Text = dialog.FolderName; }
+        }
+
         private void LadeWerteAusConfig()
         {
             try
@@ -188,6 +197,7 @@
                     {
                         _txtZielOrdner.Text = config.ZielOrdner ?? AppDomain.CurrentDomain.BaseDirectory;
                         _txtUnsortedOrdner.Text = config.UnsortedOrdner ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "unsorted");
+                        _txtArchivOrdner.Text = config.ArchivOrdner ?? ""; // NEU
                         _txtImapServer.Text = config.ImapServer ?? "";
                         _txtImapPort.Text = config.ImapPort.ToString();
                         _txtEmailKonto.Text = config.EmailKonto ?? "";
@@ -202,6 +212,7 @@
                 // Fallback Standardwerte
                 _txtZielOrdner.Text = AppDomain.CurrentDomain.BaseDirectory;
                 _txtUnsortedOrdner.Text = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "unsorted");
+                _txtArchivOrdner.Text = "";
                 _txtImapPort.Text = "993";
                 _txtTageZurueck.Text = "7";
                 _chkNurUngelesene.IsChecked = false;
@@ -271,6 +282,7 @@
                 // Werte aus UI in das Config-Objekt übertragen (mit robuster Konvertierung)
                 config.ZielOrdner = _txtZielOrdner.Text.Trim();
                 config.UnsortedOrdner = _txtUnsortedOrdner.Text.Trim();
+                config.ArchivOrdner = _txtArchivOrdner.Text.Trim(); // NEU
                 config.ImapServer = _txtImapServer.Text.Trim();
 
                 if (int.TryParse(_txtImapPort.Text.Trim(), out int port))

@@ -351,6 +351,55 @@
             }
         }
 
+        /// <summary>
+        /// NEU: Verschiebt den E-Mail-Ordner aus dem Unsorted-Ordner in den Archiv-Ordner
+        /// und benennt ihn in "Absender Hash" um. Kein Firmenordner, keine Auftragsnummer,
+        /// kein Blacklist-Eintrag. Gibt den neuen Pfad zurück.
+        /// </summary>
+        public string OrdnerInArchivVerschieben(int dbId, string uniqueId, string aktuellerOrdnerPfad, string absenderName)
+        {
+            try
+            {
+                var config = AppConfig.Laden();
+                string archivOrdner = config.ArchivOrdner;
+
+                if (string.IsNullOrWhiteSpace(archivOrdner))
+                {
+                    throw new Exception("In den Einstellungen ist kein 'Archiv-Ordner' angegeben!");
+                }
+
+                if (!Directory.Exists(aktuellerOrdnerPfad))
+                {
+                    throw new DirectoryNotFoundException($"Der Quell-Ordner wurde nicht gefunden: {aktuellerOrdnerPfad}");
+                }
+
+                Directory.CreateDirectory(archivOrdner);
+
+                string sauberAbsender = string.Join("_", (absenderName ?? "").Split(Path.GetInvalidFileNameChars())).Trim();
+                if (sauberAbsender.Length > 60) sauberAbsender = sauberAbsender.Substring(0, 60).Trim();
+                if (string.IsNullOrEmpty(sauberAbsender)) sauberAbsender = "Unbekannt";
+
+                string hash = GenerateShortHash(uniqueId);
+                string neuerName = $"{sauberAbsender} {hash}";
+                string zielPfad = Path.Combine(archivOrdner, neuerName);
+
+                if (Directory.Exists(zielPfad))
+                {
+                    zielPfad = Path.Combine(archivOrdner, $"{neuerName}_{DateTime.Now:HHmmss}");
+                }
+
+                Directory.Move(aktuellerOrdnerPfad, zielPfad);
+                LoescheUnsortedEintrag(dbId);
+
+                return zielPfad;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Fehler beim Ablegen]: {ex.Message}");
+                throw;
+            }
+        }
+
         public string HoleGespeicherteFirmaFuerAbsender(string senderEmail)
         {
             if (string.IsNullOrWhiteSpace(senderEmail)) return string.Empty;
@@ -579,7 +628,7 @@
         public string Subject { get; set; }
         public DateTime Date { get; set; }
         public string FilePath { get; set; }
-        public List<string> Attachments { get; set; } = new List<string>(); // NEU
+        public List<string> Attachments { get; set; } = new List<string>();
     }
 
     public class BlockedSenderModel
