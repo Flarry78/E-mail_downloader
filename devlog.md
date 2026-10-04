@@ -105,3 +105,12 @@
 - ablegen button hinzugefügt damit man emails die nicht zu firmen gehören aber man auch nicht löschen will verschieben kann
 - anhänge werden jetzt unter dem absender angezeigt und können mit einem doppelklick angesehen werden
 - bilder werden richtig in der eml angezeigt
+
+
+## 2026-10-01
+
+- App wieder dem Kunden gezeigt.
+- Festgestellt das Outlook ( Microsoft ) andere Bedingunen hat
+- Entra ID erstellt und Programm bei Azure regestriert
+- In den Settings vom Gui und der config.json die Einstellungen eingefügt wenn es sich um eine Outlook Email handelt mir Oauth2
+- Programm erweitert das nun auch Oauth2 funktioniert

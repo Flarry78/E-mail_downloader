@@ -12,6 +12,7 @@
     using MailKit;
     using MailKit.Net.Imap;
     using MailKit.Search;
+    using MailKit.Security;
     using MimeKit;
 
     public class EmailService
@@ -352,7 +353,7 @@
         }
 
         /// <summary>
-        /// NEU: Verschiebt den E-Mail-Ordner aus dem Unsorted-Ordner in den Archiv-Ordner
+        /// Verschiebt den E-Mail-Ordner aus dem Unsorted-Ordner in den Archiv-Ordner
         /// und benennt ihn in "Absender Hash" um. Kein Firmenordner, keine Auftragsnummer,
         /// kein Blacklist-Eintrag. Gibt den neuen Pfad zurück.
         /// </summary>
@@ -489,7 +490,23 @@
                 {
                     Console.WriteLine("[IMAP] Verbinde und authentifiziere...");
                     await client.ConnectAsync(imapServer, port, true);
-                    await client.AuthenticateAsync(email, appPassword);
+
+                    if (config.UseOAuth2)
+                    {
+                        var tokenResult = await OAuthService.HoleAccessTokenAsync(config);
+                        string loginName = string.IsNullOrWhiteSpace(tokenResult.Account?.Username)
+                            ? email
+                            : tokenResult.Account.Username;
+                        Console.WriteLine($"[OAuth] Token erhalten für Konto: {loginName}");
+                        var oauth2 = new SaslMechanismOAuth2(loginName, tokenResult.AccessToken);
+                        await client.AuthenticateAsync(oauth2);
+                        Console.WriteLine("[IMAP] Mit OAuth2 angemeldet.");
+                    }
+                    else
+                    {
+                        await client.AuthenticateAsync(email, appPassword);
+                    }
+
                     var inbox = client.Inbox;
                     await inbox.OpenAsync(FolderAccess.ReadWrite);
 

@@ -199,19 +199,12 @@
         {
             Log.Information("📥 Benutzer hat 'E-Mails abrufen' angeklickt.");
 
-            string imapServer;
-            string emailKonto;
-            string passwort;
-            string unsortedOrdner;
+            AppConfig config;
 
             try
             {
-                var config = AppConfig.Laden();
-                imapServer = config.ImapServer;
-                emailKonto = config.EmailKonto;
-                passwort = config.Passwort;
+                config = AppConfig.Laden();
                 _zielOrdner = config.ZielOrdner;
-                unsortedOrdner = config.UnsortedOrdner;
             }
             catch (Exception ex)
             {
@@ -220,12 +213,14 @@
                 return;
             }
 
-            if (string.IsNullOrEmpty(imapServer) || string.IsNullOrEmpty(emailKonto) || string.IsNullOrEmpty(passwort))
+            if (!config.ZugangsdatenVollstaendig(out string fehler))
             {
-                Log.Warning("Download abgebrochen: Zugangsdaten in config.json fehlen.");
-                MessageBox.Show("Bitte überprüfe deine config.json. Zugangsdaten fehlen!", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+                Log.Warning("Download abgebrochen: {Fehler}", fehler);
+                MessageBox.Show($"{fehler}\n\nBitte prüfe die Einstellungen.", "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
+
+            int port = config.ImapPort > 0 ? config.ImapPort : 993;
 
             this.IsEnabled = false;
             var progressWindow = new ProgressDialog(this);
@@ -237,10 +232,12 @@
 
             try
             {
-                progressWindow.AppendLog("Starte Verbindung zum IMAP-Server...\n");
+                progressWindow.AppendLog(config.UseOAuth2
+                    ? "Starte Verbindung zum IMAP-Server (OAuth2)...\n"
+                    : "Starte Verbindung zum IMAP-Server...\n");
 
                 var emailService = new EmailService();
-                var neueEmails = await emailService.FetchNewEmailsAsync(imapServer, 993, emailKonto, passwort, unsortedOrdner);
+                var neueEmails = await emailService.FetchNewEmailsAsync(config.ImapServer, port, config.EmailKonto, config.Passwort, config.UnsortedOrdner);
 
                 Log.Information("📥 E-Mail-Download erfolgreich abgeschlossen. {Count} neue E-Mails heruntergeladen.", neueEmails.Count);
                 progressWindow.AppendLog($"\nFertig! {neueEmails.Count} neue E-Mails heruntergeladen.");
@@ -434,7 +431,7 @@
             }
         }
 
-        // NEU: E-Mail in den Archiv-Ordner ablegen (umbenannt nach Absender + Hash)
+        // E-Mail in den Archiv-Ordner ablegen (umbenannt nach Absender + Hash)
         private void BtnArchive_Click(object sender, RoutedEventArgs e)
         {
             if (!(EmailListView.SelectedItem is EmailPreviewModel selectedEmail))

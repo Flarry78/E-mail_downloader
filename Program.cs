@@ -33,28 +33,24 @@
                 // Konfiguration aus der config.json laden
                 var config = AppConfig.Laden();
 
-                string imapServer = config.ImapServer;
-                string emailKonto = config.EmailKonto;
-                string passwort = config.Passwort;
-                string zielOrdner = config.ZielOrdner;
-
-                if (string.IsNullOrEmpty(imapServer) || string.IsNullOrEmpty(emailKonto) || string.IsNullOrEmpty(passwort))
+                if (!config.ZugangsdatenVollstaendig(out string fehler))
                 {
-                    Log.Error("Fehler: Bitte überprüfe deine config.json. Es fehlen Zugangsdaten!");
-                    Console.WriteLine("Fehler: Bitte überprüfe deine config.json. Es fehlen Zugangsdaten!");
+                    Log.Error("Fehler: {Fehler}", fehler);
+                    Console.WriteLine($"Fehler: {fehler}");
                     return;
                 }
 
-                Log.Information("Verbinde mit {Server} für Konto {Konto}...", imapServer, emailKonto);
-                Console.WriteLine($"Verbinde mit {imapServer} für Konto {emailKonto}...");
-                Console.WriteLine($"Zielordner: {zielOrdner}");
+                string modus = config.UseOAuth2 ? "OAuth2" : "Passwort";
+                Log.Information("Verbinde mit {Server} für Konto {Konto} (Anmeldung: {Modus})...", config.ImapServer, config.EmailKonto, modus);
+                Console.WriteLine($"Verbinde mit {config.ImapServer} für Konto {config.EmailKonto} (Anmeldung: {modus})...");
+                Console.WriteLine($"Zielordner: {config.ZielOrdner}");
                 Console.WriteLine(new string('-', 50));
 
                 var emailService = new EmailService();
 
-                int port = 993;
+                int port = config.ImapPort > 0 ? config.ImapPort : 993;
                 // E-Mails abrufen
-                var neueEmails = await emailService.FetchNewEmailsAsync(imapServer, port, emailKonto, passwort, zielOrdner);
+                var neueEmails = await emailService.FetchNewEmailsAsync(config.ImapServer, port, config.EmailKonto, config.Passwort, config.ZielOrdner);
 
                 Log.Information("Prozess erfolgreich abgeschlossen. {Count} neue E-Mails verarbeitet.", neueEmails.Count);
                 Console.WriteLine($"\n[Fertig] Prozess abgeschlossen. {neueEmails.Count} neue E-Mails verarbeitet.");
