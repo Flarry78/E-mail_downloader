@@ -472,9 +472,12 @@
             }
         }
 
+        // =====================================================================================
+        //  Abruf (Microsoft Graph oder IMAP)
+        // =====================================================================================
+
         public async Task<List<EmailPreviewModel>> FetchNewEmailsAsync(string imapServer, int port, string email, string appPassword, string zielHauptOrdner)
         {
-            var newEmails = new List<EmailPreviewModel>();
             var config = AppConfig.Laden();
 
             int tageZurueck = config.TAGE_ZURUECK > 0 ? config.TAGE_ZURUECK : 7;
@@ -484,31 +487,120 @@
             string unsortedOrdnerPfad = config.UnsortedOrdner;
             Directory.CreateDirectory(unsortedOrdnerPfad);
 
+            try
+            {
+                if (config.IstGraph)
+                {
+                    return await FetchViaGraphAsync(config, unsortedOrdnerPfad, tageZurueck, nurUngelesene, delayMs);
+                }
+
+                return await FetchViaImapAsync(config, imapServer, port, email, appPassword, unsortedOrdnerPfad, tageZurueck, nurUngelesene, delayMs);
+            }
+            finally
+            {
+                // Auch bei einem Fehler mittendrin merken, was schon heruntergeladen wurde
+                SaveCache();
+            }
+        }
+
+        private async Task<List<EmailPreviewModel>> FetchViaGraphAsync(AppConfig config, string unsortedOrdnerPfad, int tageZurueck, bool nurUngelesene, int delayMs)
+        {
+            var newEmails = new List<EmailPreviewModel>();
+
+            try
+            {
+                Console.WriteLine("[Graph] Melde bei Microsoft an...");
+                // Erster Aufruf darf den Browser öffnen, alle weiteren nur lautlos (Cache / Refresh-Token)
+                var ersterToken = await OAuthService.HoleAccessTokenAsync(config, true);
+                Console.WriteLine($"[Graph] Angemeldet als: {ersterToken.Account?.Username}");
+
+                bool ersterAufruf = true;
+                Func<Task<string>> tokenProvider = async () =>
+                {
+                    if (ersterAufruf)
+                    {
+                        ersterAufruf = false;
+                        return ersterToken.AccessToken;
+                    }
+                    var r = await OAuthService.HoleAccessTokenAsync(config, false);
+                    return r.AccessToken;
+                };
+
+                using (var graph = new GraphMailClient(tokenProvider))
+                {
+                    Console.WriteLine("[Graph] Suche nach E-Mails im Posteingang...");
+                    var liste = await graph.HoleNachrichtenAsync(DateTime.UtcNow.AddDays(-tageZurueck), nurUngelesene);
+                    Console.WriteLine($"[Graph] Gefundene E-Mails im Postfach: {liste.Count}");
+
+                    int counter = 1;
+                    foreach (var info in liste)
+                    {
+                        string uniqueId = info.Id;
+
+                        if (!_downloadedIds.Contains(uniqueId))
+                        {
+                            if (!string.IsNullOrEmpty(info.AbsenderEmail) && IstAbsenderBlockiert(info.AbsenderEmail))
+                            {
+                                Console.WriteLine($"[Blacklist] Überspringe blockierten Absender: {info.AbsenderEmail}");
+                                _downloadedIds.Add(uniqueId);
+                                counter++;
+                                continue;
+                            }
+
+                            Console.WriteLine($"[Download] Lade E-Mail {counter} von {liste.Count}...");
+                            byte[] rohdaten = await graph.HoleRohdatenAsync(info.Id);
+
+                            MimeMessage message;
+                            using (var ms = new MemoryStream(rohdaten))
+                            {
+                                message = await MimeMessage.LoadAsync(ms);
+                            }
+
+                            var model = await SpeichereNachrichtAsync(message, uniqueId, unsortedOrdnerPfad, config, info.Empfangen.LocalDateTime);
+                            newEmails.Add(model);
+
+                            _downloadedIds.Add(uniqueId);
+                            Console.WriteLine("[Erfolg] E-Mail gespeichert.\n");
+
+                            if (delayMs > 0)
+                            {
+                                await Task.Delay(delayMs);
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine($"[Info] E-Mail {counter}/{liste.Count} ist bereits im Cache. Überspringe...");
+                        }
+                        counter++;
+                    }
+                }
+
+                Console.WriteLine("[Graph] Fertig.");
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"Graph-Fehler: {ex.Message}");
+            }
+
+            return newEmails;
+        }
+
+        private async Task<List<EmailPreviewModel>> FetchViaImapAsync(AppConfig config, string imapServer, int port, string email, string appPassword,
+            string unsortedOrdnerPfad, int tageZurueck, bool nurUngelesene, int delayMs)
+        {
+            var newEmails = new List<EmailPreviewModel>();
+
             using (var client = new ImapClient())
             {
                 try
                 {
                     Console.WriteLine("[IMAP] Verbinde und authentifiziere...");
                     await client.ConnectAsync(imapServer, port, true);
-
-                    if (config.UseOAuth2)
-                    {
-                        var tokenResult = await OAuthService.HoleAccessTokenAsync(config);
-                        string loginName = string.IsNullOrWhiteSpace(tokenResult.Account?.Username)
-                            ? email
-                            : tokenResult.Account.Username;
-                        Console.WriteLine($"[OAuth] Token erhalten für Konto: {loginName}");
-                        var oauth2 = new SaslMechanismOAuth2(loginName, tokenResult.AccessToken);
-                        await client.AuthenticateAsync(oauth2);
-                        Console.WriteLine("[IMAP] Mit OAuth2 angemeldet.");
-                    }
-                    else
-                    {
-                        await client.AuthenticateAsync(email, appPassword);
-                    }
+                    await ImapAnmeldenAsync(client, config, email, appPassword);
 
                     var inbox = client.Inbox;
-                    await inbox.OpenAsync(FolderAccess.ReadWrite);
+                    // Nur lesend öffnen: es wird nichts im Postfach verändert (auch kein "gelesen"-Markieren)
+                    await inbox.OpenAsync(FolderAccess.ReadOnly);
 
                     var query = SearchQuery.All;
                     if (nurUngelesene) query = query.And(SearchQuery.NotSeen);
@@ -546,65 +638,11 @@
                             Console.WriteLine($"[Download] Lade E-Mail {counter} von {uids.Count} (UID: {uniqueId})...");
                             var message = await inbox.GetMessageAsync(uid);
 
-                            var mailbox = message.From.Mailboxes.FirstOrDefault();
-                            absenderEmail = mailbox?.Address ?? message.From.ToString();
-
-                            string absenderName = !string.IsNullOrWhiteSpace(mailbox?.Name)
-                                ? mailbox.Name.Trim()
-                                : absenderEmail;
-
-                            string betreff = message.Subject ?? "Kein Betreff";
-                            DateTime datum = message.Date.DateTime;
-
-                            ErfasseOderPruefeEmail(absenderEmail, absenderName);
-
-                            string datumString = datum.ToString("yyyy-MM-dd_HHmmss");
-                            string idHash = GenerateShortHash(uniqueId);
-                            string ordnerName = $"{datumString}_{idHash}";
-
-                            string zielOrdnerPfad = Path.Combine(unsortedOrdnerPfad, ordnerName);
-                            Directory.CreateDirectory(zielOrdnerPfad);
-
-                            string emlPfad = Path.Combine(zielOrdnerPfad, "email.eml");
-                            await message.WriteToAsync(emlPfad);
-
-                            var anhaengeNamen = new List<string>();
-
-                            foreach (var attachment in message.Attachments)
-                            {
-                                if (attachment is MimePart mimePart)
-                                {
-                                    var disposition = mimePart.ContentDisposition?.Disposition;
-                                    if (disposition != null && disposition.Equals("attachment", StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        string originalFileName = mimePart.FileName ?? "unbenannt.dat";
-                                        string anhangPfad = Path.Combine(zielOrdnerPfad, originalFileName);
-                                        anhaengeNamen.Add(originalFileName);
-
-                                        using (var memoryStream = new MemoryStream())
-                                        {
-                                            await mimePart.Content.DecodeToAsync(memoryStream);
-                                            await File.WriteAllBytesAsync(anhangPfad, memoryStream.ToArray());
-                                        }
-                                    }
-                                }
-                            }
-
-                            SpeichereUnsortedEmailInDb(uniqueId, absenderName, absenderEmail, betreff, datum, zielOrdnerPfad);
-
-                            newEmails.Add(new EmailPreviewModel
-                            {
-                                UniqueId = uniqueId,
-                                Sender = absenderName,
-                                SenderEmail = absenderEmail,
-                                Subject = betreff,
-                                Date = datum,
-                                FilePath = zielOrdnerPfad,
-                                Attachments = anhaengeNamen // Anhänge für die Vorschau übergeben
-                            });
+                            var model = await SpeichereNachrichtAsync(message, uniqueId, unsortedOrdnerPfad, config, null);
+                            newEmails.Add(model);
 
                             _downloadedIds.Add(uniqueId);
-                            Console.WriteLine($"[Erfolg] E-Mail gespeichert.\n");
+                            Console.WriteLine("[Erfolg] E-Mail gespeichert.\n");
 
                             if (delayMs > 0)
                             {
@@ -618,11 +656,6 @@
                         counter++;
                     }
 
-                    if (newEmails.Count > 0)
-                    {
-                        SaveCache();
-                    }
-
                     await client.DisconnectAsync(true);
                     Console.WriteLine("[IMAP] Verbindung getrennt.");
                 }
@@ -633,6 +666,308 @@
             }
 
             return newEmails;
+        }
+
+        /// <summary>
+        /// Meldet den IMAP-Client an: entweder mit Passwort / App-Key oder mit OAuth2-Token.
+        /// Bei OAuth2 wird der Benutzername aus dem Token verwendet, damit er sicher zum Konto passt.
+        /// Gibt den verwendeten Anmeldenamen zurück.
+        /// </summary>
+        private async Task<string> ImapAnmeldenAsync(ImapClient client, AppConfig config, string email, string appPassword)
+        {
+            if (config.IstImapOAuth2)
+            {
+                var tokenResult = await OAuthService.HoleAccessTokenAsync(config, true);
+                string loginName = string.IsNullOrWhiteSpace(tokenResult.Account?.Username)
+                    ? email
+                    : tokenResult.Account.Username;
+
+                Console.WriteLine($"[OAuth] Token erhalten für Konto: {loginName}");
+                await client.AuthenticateAsync(new SaslMechanismOAuth2(loginName, tokenResult.AccessToken));
+                Console.WriteLine("[IMAP] Mit OAuth2 angemeldet.");
+                return loginName;
+            }
+
+            await client.AuthenticateAsync(email, appPassword);
+            return email;
+        }
+
+        /// <summary>
+        /// Verbindungstest für alle drei Anmeldearten. Liefert einen Text für die Anzeige
+        /// und wirft bei einem Fehler eine Exception.
+        /// </summary>
+        public async Task<string> TesteVerbindungAsync(AppConfig config)
+        {
+            if (config.IstGraph)
+            {
+                var token = await OAuthService.HoleAccessTokenAsync(config, true);
+
+                int anzahlGraph;
+                using (var graph = new GraphMailClient(() => Task.FromResult(token.AccessToken)))
+                {
+                    anzahlGraph = await graph.HoleAnzahlPosteingangAsync();
+                }
+
+                return $"Angemeldet als {token.Account?.Username}.\nPosteingang über Microsoft Graph erreichbar ({anzahlGraph} Nachrichten).";
+            }
+
+            int port = config.ImapPort > 0 ? config.ImapPort : 993;
+
+            using (var client = new ImapClient())
+            {
+                await client.ConnectAsync(config.ImapServer, port, true);
+                string konto = await ImapAnmeldenAsync(client, config, config.EmailKonto, config.Passwort);
+
+                var inbox = client.Inbox;
+                await inbox.OpenAsync(FolderAccess.ReadOnly);
+                int anzahlImap = inbox.Count;
+                await client.DisconnectAsync(true);
+
+                return $"Angemeldet als {konto}.\nPosteingang über IMAP erreichbar ({anzahlImap} Nachrichten).";
+            }
+        }
+
+        // =====================================================================================
+        //  Gemeinsames Speichern (Graph und IMAP) inkl. Anhang-Filter
+        // =====================================================================================
+
+        private async Task<EmailPreviewModel> SpeichereNachrichtAsync(MimeMessage message, string uniqueId, string unsortedOrdnerPfad, AppConfig config, DateTime? ersatzDatum)
+        {
+            var mailbox = message.From.Mailboxes.FirstOrDefault();
+            string absenderEmail = mailbox?.Address ?? message.From.ToString();
+            string absenderName = !string.IsNullOrWhiteSpace(mailbox?.Name) ? mailbox.Name.Trim() : absenderEmail;
+
+            string betreff = message.Subject ?? "Kein Betreff";
+            DateTime datum = message.Date == DateTimeOffset.MinValue
+                ? (ersatzDatum ?? DateTime.Now)
+                : message.Date.DateTime;
+
+            ErfasseOderPruefeEmail(absenderEmail, absenderName);
+
+            string datumString = datum.ToString("yyyy-MM-dd_HHmmss");
+            string idHash = GenerateShortHash(uniqueId);
+            string ordnerName = $"{datumString}_{idHash}";
+
+            string zielOrdnerPfad = Path.Combine(unsortedOrdnerPfad, ordnerName);
+            Directory.CreateDirectory(zielOrdnerPfad);
+
+            // 1) Anhänge einsammeln (mit ihrem übergeordneten Multipart, um sie notfalls entfernen zu können)
+            var kandidaten = new List<MimePart>();
+            var eltern = new List<Multipart>();
+            var iter = new MimeIterator(message);
+            while (iter.MoveNext())
+            {
+                if (iter.Parent is Multipart multipart && iter.Current is MimePart part && IstAnhang(part))
+                {
+                    kandidaten.Add(part);
+                    eltern.Add(multipart);
+                }
+            }
+
+            // 2) Nur erlaubte Anhänge speichern, alle anderen verwerfen
+            var anhaengeNamen = new List<string>();
+            var belegteNamen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "email.eml" };
+            var zuEntfernen = new List<int>();
+
+            for (int i = 0; i < kandidaten.Count; i++)
+            {
+                var part = kandidaten[i];
+                string sauberName = SaubererDateiname(part.FileName);
+
+                if (!config.IstAnhangErlaubt(sauberName))
+                {
+                    Console.WriteLine($"[Anhang] Nicht gespeichert (Dateityp nicht freigegeben): {sauberName}");
+                    zuEntfernen.Add(i);
+                    continue;
+                }
+
+                byte[] daten;
+                using (var memoryStream = new MemoryStream())
+                {
+                    await part.Content.DecodeToAsync(memoryStream);
+                    daten = memoryStream.ToArray();
+                }
+
+                if (!InhaltPasstZurEndung(Path.GetExtension(sauberName), daten))
+                {
+                    Console.WriteLine($"[Anhang] Nicht gespeichert (Inhalt passt nicht zur Endung): {sauberName}");
+                    zuEntfernen.Add(i);
+                    continue;
+                }
+
+                string finalerName = EindeutigerName(sauberName, belegteNamen);
+                await File.WriteAllBytesAsync(Path.Combine(zielOrdnerPfad, finalerName), daten);
+                anhaengeNamen.Add(finalerName);
+            }
+
+            // 3) Verworfene Anhänge auch aus der gespeicherten email.eml entfernen,
+            //    damit keine gesperrten Dateien in irgendeiner Form auf der Platte landen
+            foreach (int index in zuEntfernen)
+            {
+                eltern[index].Remove(kandidaten[index]);
+            }
+
+            string emlPfad = Path.Combine(zielOrdnerPfad, "email.eml");
+            await message.WriteToAsync(emlPfad);
+
+            SpeichereUnsortedEmailInDb(uniqueId, absenderName, absenderEmail, betreff, datum, zielOrdnerPfad);
+
+            return new EmailPreviewModel
+            {
+                UniqueId = uniqueId,
+                Sender = absenderName,
+                SenderEmail = absenderEmail,
+                Subject = betreff,
+                Date = datum,
+                FilePath = zielOrdnerPfad,
+                Attachments = anhaengeNamen
+            };
+        }
+
+        private static bool IstAnhang(MimePart part)
+        {
+            var disposition = part.ContentDisposition?.Disposition;
+            if (disposition != null && disposition.Equals("attachment", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // Datei ohne Disposition-Angabe, aber mit Dateiname und ohne Content-ID (also kein Inline-Bild)
+            return !(part is TextPart)
+                   && !string.IsNullOrEmpty(part.FileName)
+                   && string.IsNullOrEmpty(part.ContentId);
+        }
+
+        private static string SaubererDateiname(string originalName)
+        {
+            string name = string.IsNullOrWhiteSpace(originalName) ? "unbenannt" : originalName;
+
+            // Pfadanteile entfernen (Schutz vor "..\..\datei")
+            name = Path.GetFileName(name.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar));
+
+            foreach (char c in Path.GetInvalidFileNameChars())
+            {
+                name = name.Replace(c, '_');
+            }
+
+            name = name.Trim().TrimEnd('.', ' ');
+            if (string.IsNullOrEmpty(name)) name = "unbenannt";
+
+            if (name.Length > 150)
+            {
+                string endung = Path.GetExtension(name);
+                string basis = Path.GetFileNameWithoutExtension(name);
+                int max = Math.Max(1, 150 - endung.Length);
+                name = basis.Substring(0, Math.Min(basis.Length, max)) + endung;
+            }
+
+            return name;
+        }
+
+        private static string EindeutigerName(string name, HashSet<string> belegt)
+        {
+            string basis = Path.GetFileNameWithoutExtension(name);
+            string endung = Path.GetExtension(name);
+            string kandidat = name;
+            int nr = 2;
+
+            while (belegt.Contains(kandidat))
+            {
+                kandidat = $"{basis} ({nr}){endung}";
+                nr++;
+            }
+
+            belegt.Add(kandidat);
+            return kandidat;
+        }
+
+        /// <summary>
+        /// Zusätzlicher Schutz gegen umbenannte Dateien: Eine ".pdf" muss wirklich mit einem PDF-Header
+        /// beginnen, eine ".jpg" mit einem JPEG-Header. CAD-Formate haben keinen einheitlichen Header
+        /// und werden nur über die Endung geprüft.
+        /// </summary>
+        private static bool InhaltPasstZurEndung(string endung, byte[] daten)
+        {
+            string e = (endung ?? "").TrimStart('.').ToLowerInvariant();
+
+            if (e == "pdf")
+            {
+                // "%PDF" muss in den ersten 1024 Bytes vorkommen
+                int grenze = Math.Min(daten.Length - 4, 1024);
+                for (int i = 0; i <= grenze; i++)
+                {
+                    if (daten[i] == 0x25 && daten[i + 1] == 0x50 && daten[i + 2] == 0x44 && daten[i + 3] == 0x46)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            if (e == "jpg" || e == "jpeg")
+            {
+                return daten.Length >= 3 && daten[0] == 0xFF && daten[1] == 0xD8 && daten[2] == 0xFF;
+            }
+
+            if (e == "png")
+            {
+                return daten.Length >= 8 && daten[0] == 0x89 && daten[1] == 0x50 && daten[2] == 0x4E && daten[3] == 0x47
+                       && daten[4] == 0x0D && daten[5] == 0x0A && daten[6] == 0x1A && daten[7] == 0x0A;
+            }
+
+            if (e == "gif")
+            {
+                // "GIF8"
+                return daten.Length >= 4 && daten[0] == 0x47 && daten[1] == 0x49 && daten[2] == 0x46 && daten[3] == 0x38;
+            }
+
+            if (e == "bmp")
+            {
+                // "BM"
+                return daten.Length >= 2 && daten[0] == 0x42 && daten[1] == 0x4D;
+            }
+
+            if (e == "tif" || e == "tiff")
+            {
+                // "II*\0" (little endian) oder "MM\0*" (big endian)
+                if (daten.Length < 4) return false;
+                bool little = daten[0] == 0x49 && daten[1] == 0x49 && daten[2] == 0x2A && daten[3] == 0x00;
+                bool big = daten[0] == 0x4D && daten[1] == 0x4D && daten[2] == 0x00 && daten[3] == 0x2A;
+                return little || big;
+            }
+
+            if (e == "webp")
+            {
+                // "RIFF" .... "WEBP"
+                return daten.Length >= 12
+                       && daten[0] == 0x52 && daten[1] == 0x49 && daten[2] == 0x46 && daten[3] == 0x46
+                       && daten[8] == 0x57 && daten[9] == 0x45 && daten[10] == 0x42 && daten[11] == 0x50;
+            }
+
+            if (e == "txt")
+            {
+                // UTF-16 mit Byte-Order-Mark ist ein normaler Text (Windows-Editor "Unicode")
+                if (daten.Length >= 2 && ((daten[0] == 0xFF && daten[1] == 0xFE) || (daten[0] == 0xFE && daten[1] == 0xFF)))
+                {
+                    return true;
+                }
+
+                // Programme beginnen mit "MZ"
+                if (daten.Length >= 2 && daten[0] == 0x4D && daten[1] == 0x5A)
+                {
+                    return false;
+                }
+
+                // Echter Text enthält keine Null-Bytes; Binärdateien meistens schon
+                int grenze = Math.Min(daten.Length, 4096);
+                for (int i = 0; i < grenze; i++)
+                {
+                    if (daten[i] == 0x00) return false;
+                }
+                return true;
+            }
+
+            return true;
         }
     }
 

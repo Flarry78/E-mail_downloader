@@ -3,7 +3,9 @@
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using System.Text.Json;
+    using System.Threading.Tasks;
     using System.Windows;
     using System.Windows.Controls;
     using System.Windows.Media;
@@ -17,13 +19,15 @@
         private TextBox _txtImapServer;
         private TextBox _txtImapPort;
         private TextBox _txtEmailKonto;
-        private TextBox _txtPasswort;
+        private PasswordBox _pwdPasswort;
         private TextBox _txtTageZurueck;
         private CheckBox _chkNurUngelesene;
         private TextBox _txtDelay;
+        private TextBox _txtAnhangEndungen;
 
-        // NEU: OAuth2
-        private CheckBox _chkOAuth2;
+        // Anmeldeart und OAuth2
+        private ComboBox _cmbAnmeldeart;
+        private TextBlock _txtAnmeldeHinweis;
         private TextBox _txtOAuthClientId;
         private TextBox _txtOAuthTenantId;
         private Button _btnOAuthLogin;
@@ -37,14 +41,14 @@
             Owner = owner;
             Title = "Einstellungen & Optionen";
             Width = 600;
-            Height = 760;
+            Height = 780;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ResizeMode = ResizeMode.NoResize;
 
             ErmittleConfigPfad();
             ErstelleUiLayout();
             LadeWerteAusConfig();
-            AktualisiereOAuthFelder();
+            AktualisiereFelder();
             LadeBlockierteAbsender();
         }
 
@@ -74,7 +78,7 @@
             var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var gridSettings = new Grid { Margin = new Thickness(15) };
 
-            for (int i = 0; i < 20; i++)
+            for (int i = 0; i < 24; i++)
             {
                 gridSettings.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             }
@@ -83,30 +87,38 @@
             FügeEingabeZeile(gridSettings, row++, "Haupt-Zielordner (Firmen):", out _txtZielOrdner, true, WähleZielOrdnerAus);
             FügeEingabeZeile(gridSettings, row++, "Unsorted-Ordner (Eingang):", out _txtUnsortedOrdner, true, WähleUnsortedOrdnerAus);
             FügeEingabeZeile(gridSettings, row++, "Archiv-Ordner (Ablegen):", out _txtArchivOrdner, true, WähleArchivOrdnerAus);
-            FügeEingabeZeileSimple(gridSettings, row++, "IMAP-Server:", out _txtImapServer);
-            FügeEingabeZeileSimple(gridSettings, row++, "IMAP-Port:", out _txtImapPort);
-            FügeEingabeZeileSimple(gridSettings, row++, "E-Mail-Konto / Benutzer:", out _txtEmailKonto);
 
-            // --- Anmeldeart: OAuth2 oder Passwort ---
-            var stackOAuth = new StackPanel { Margin = new Thickness(0, 4, 0, 8) };
-            _chkOAuth2 = new CheckBox
+            // --- Anmeldeart: IMAP mit Passwort, IMAP mit OAuth2 oder Microsoft Graph ---
+            var stackModus = new StackPanel { Margin = new Thickness(0, 4, 0, 8) };
+            stackModus.Children.Add(new TextBlock
             {
-                Content = "Mit OAuth2 anmelden (Microsoft / Outlook / Microsoft 365)",
+                Text = "Anmeldeart:",
                 FontWeight = FontWeights.Bold,
-                FontSize = 12
-            };
-            _chkOAuth2.Checked += (s, e) => AktualisiereOAuthFelder();
-            _chkOAuth2.Unchecked += (s, e) => AktualisiereOAuthFelder();
-            stackOAuth.Children.Add(_chkOAuth2);
-            stackOAuth.Children.Add(new TextBlock
+                FontSize = 12,
+                Margin = new Thickness(0, 0, 0, 2)
+            });
+
+            _cmbAnmeldeart = new ComboBox { Width = 500, Height = 26, HorizontalAlignment = HorizontalAlignment.Left };
+            _cmbAnmeldeart.Items.Add("IMAP mit Passwort / App-Key (z. B. Yahoo)");
+            _cmbAnmeldeart.Items.Add("IMAP mit OAuth2 (Microsoft, IMAP muss freigeschaltet sein)");
+            _cmbAnmeldeart.Items.Add("Microsoft Graph (Outlook / Microsoft 365, nur lesend)");
+            _cmbAnmeldeart.SelectedIndex = 0;
+            _cmbAnmeldeart.SelectionChanged += (s, e) => AktualisiereFelder();
+            stackModus.Children.Add(_cmbAnmeldeart);
+
+            _txtAnmeldeHinweis = new TextBlock
             {
-                Text = "Ohne Haken: normale Anmeldung mit Passwort / App-Key (z. B. Yahoo).",
                 FontSize = 11,
                 Foreground = Brushes.Gray,
-                Margin = new Thickness(18, 2, 0, 0)
-            });
-            Grid.SetRow(stackOAuth, row++);
-            gridSettings.Children.Add(stackOAuth);
+                TextWrapping = TextWrapping.Wrap,
+                Width = 500,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 4, 0, 0)
+            };
+            stackModus.Children.Add(_txtAnmeldeHinweis);
+
+            Grid.SetRow(stackModus, row++);
+            gridSettings.Children.Add(stackModus);
 
             FügeEingabeZeileSimple(gridSettings, row++, "OAuth2 Client-ID (Anwendungs-ID aus Entra ID):", out _txtOAuthClientId);
             FügeEingabeZeileSimple(gridSettings, row++, "OAuth2 Tenant-ID (oder 'common' / 'consumers'):", out _txtOAuthTenantId);
@@ -121,7 +133,32 @@
             Grid.SetRow(stackOAuthButtons, row++);
             gridSettings.Children.Add(stackOAuthButtons);
 
-            FügeEingabeZeileSimple(gridSettings, row++, "Passwort / App-Key:", out _txtPasswort);
+            FügeEingabeZeileSimple(gridSettings, row++, "IMAP-Server:", out _txtImapServer);
+            FügeEingabeZeileSimple(gridSettings, row++, "IMAP-Port:", out _txtImapPort);
+            FügeEingabeZeileSimple(gridSettings, row++, "E-Mail-Konto / Benutzer (bei OAuth2 nur Anmelde-Hinweis):", out _txtEmailKonto);
+
+            // Passwort als PasswordBox (nicht lesbar, wird verschlüsselt gespeichert)
+            var stackPw = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+            stackPw.Children.Add(new TextBlock
+            {
+                Text = "Passwort / App-Key (wird verschlüsselt gespeichert):",
+                FontWeight = FontWeights.Bold,
+                FontSize = 12,
+                Margin = new Thickness(0, 0, 0, 2)
+            });
+            _pwdPasswort = new PasswordBox
+            {
+                Width = 500,
+                Height = 26,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(4),
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            stackPw.Children.Add(_pwdPasswort);
+            Grid.SetRow(stackPw, row++);
+            gridSettings.Children.Add(stackPw);
+
+            FügeEingabeZeileSimple(gridSettings, row++, "Erlaubte Anhang-Endungen (mit Komma getrennt):", out _txtAnhangEndungen);
             FügeEingabeZeileSimple(gridSettings, row++, "Tage zurück (Abrufzeitraum):", out _txtTageZurueck);
             FügeEingabeZeileSimple(gridSettings, row++, "Delay zwischen Mails (Millisekunden):", out _txtDelay);
 
@@ -230,18 +267,42 @@
         }
 
         /// <summary>
-        /// Aktiviert/deaktiviert die Felder je nachdem, ob OAuth2 oder Passwort-Anmeldung gewählt ist.
+        /// Aktiviert/deaktiviert die Felder je nach gewählter Anmeldeart.
         /// </summary>
-        private void AktualisiereOAuthFelder()
+        private void AktualisiereFelder()
         {
-            if (_chkOAuth2 == null || _txtPasswort == null) return;
+            if (_cmbAnmeldeart == null || _pwdPasswort == null) return;
 
-            bool oauth = _chkOAuth2.IsChecked == true;
+            int modus = _cmbAnmeldeart.SelectedIndex; // 0 = IMAP+Passwort, 1 = IMAP+OAuth2, 2 = Graph
+            bool oauth = modus == 1 || modus == 2;
+            bool imap = modus == 0 || modus == 1;
+
             _txtOAuthClientId.IsEnabled = oauth;
             _txtOAuthTenantId.IsEnabled = oauth;
-            _btnOAuthLogin.IsEnabled = oauth;
             _btnOAuthLogout.IsEnabled = oauth;
-            _txtPasswort.IsEnabled = !oauth;
+
+            _txtImapServer.IsEnabled = imap;
+            _txtImapPort.IsEnabled = imap;
+            _pwdPasswort.IsEnabled = modus == 0;
+
+            // Bequemer Standardwert für Outlook / Microsoft 365
+            if (modus == 1 && string.IsNullOrWhiteSpace(_txtImapServer.Text))
+            {
+                _txtImapServer.Text = "outlook.office365.com";
+            }
+
+            switch (modus)
+            {
+                case 1:
+                    _txtAnmeldeHinweis.Text = "Anmeldung über Microsoft (OAuth2), Abruf per IMAP. Die IT muss IMAP für das Postfach freischalten. Der Zugriff umfasst auch Schreibrechte.";
+                    break;
+                case 2:
+                    _txtAnmeldeHinweis.Text = "Abruf über Microsoft Graph: nur lesend (Mail.Read), kein IMAP nötig. Je nach Firma muss ein Admin der App einmal zustimmen.";
+                    break;
+                default:
+                    _txtAnmeldeHinweis.Text = "Klassische Anmeldung mit Passwort oder App-Key (z. B. Yahoo). Bei Microsoft-Postfächern nicht möglich.";
+                    break;
+            }
         }
 
         private void LadeWerteAusConfig()
@@ -260,10 +321,14 @@
                         _txtImapServer.Text = config.ImapServer ?? "";
                         _txtImapPort.Text = config.ImapPort.ToString();
                         _txtEmailKonto.Text = config.EmailKonto ?? "";
-                        _txtPasswort.Text = config.Passwort ?? "";
-                        _chkOAuth2.IsChecked = config.UseOAuth2;
+                        _pwdPasswort.Password = config.Passwort ?? "";
+                        _cmbAnmeldeart.SelectedIndex = config.IstGraph ? 2 : (config.IstImapOAuth2 ? 1 : 0);
                         _txtOAuthClientId.Text = config.OAuthClientId ?? "";
                         _txtOAuthTenantId.Text = string.IsNullOrWhiteSpace(config.OAuthTenantId) ? "common" : config.OAuthTenantId;
+                        _txtAnhangEndungen.Text = string.Join(", ",
+                            (config.ErlaubteAnhangEndungen != null && config.ErlaubteAnhangEndungen.Count > 0)
+                                ? config.ErlaubteAnhangEndungen
+                                : new List<string>(AppConfig.StandardAnhangEndungen));
                         _txtTageZurueck.Text = config.TAGE_ZURUECK.ToString();
                         _chkNurUngelesene.IsChecked = config.NUR_UNGELESENE;
                         _txtDelay.Text = config.DELAY_MILLISEKUNDEN.ToString();
@@ -276,8 +341,9 @@
                 _txtUnsortedOrdner.Text = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "unsorted");
                 _txtArchivOrdner.Text = "";
                 _txtImapPort.Text = "993";
-                _chkOAuth2.IsChecked = false;
+                _cmbAnmeldeart.SelectedIndex = 0;
                 _txtOAuthTenantId.Text = "common";
+                _txtAnhangEndungen.Text = string.Join(", ", AppConfig.StandardAnhangEndungen);
                 _txtTageZurueck.Text = "7";
                 _chkNurUngelesene.IsChecked = false;
                 _txtDelay.Text = "1500";
@@ -337,11 +403,22 @@
                 config.ImapPort = port;
 
             config.EmailKonto = _txtEmailKonto.Text.Trim();
-            config.Passwort = _txtPasswort.Text.Trim();
+            config.Passwort = _pwdPasswort.Password.Trim(); // wird beim Setzen verschlüsselt
 
-            config.UseOAuth2 = _chkOAuth2.IsChecked ?? false;
+            config.Anmeldeart = _cmbAnmeldeart.SelectedIndex == 2
+                ? AppConfig.ModusGraph
+                : (_cmbAnmeldeart.SelectedIndex == 1 ? AppConfig.ModusImapOAuth2 : AppConfig.ModusImapPasswort);
             config.OAuthClientId = _txtOAuthClientId.Text.Trim();
             config.OAuthTenantId = string.IsNullOrWhiteSpace(_txtOAuthTenantId.Text) ? "common" : _txtOAuthTenantId.Text.Trim();
+
+            // Endungen: kommagetrennt, ohne Punkt, klein geschrieben. Leer = Standardliste.
+            var endungen = _txtAnhangEndungen.Text
+                .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => x.Trim().TrimStart('.').ToLowerInvariant())
+                .Where(x => x.Length > 0)
+                .Distinct()
+                .ToList();
+            config.ErlaubteAnhangEndungen = endungen.Count > 0 ? endungen : new List<string>(AppConfig.StandardAnhangEndungen);
 
             if (int.TryParse(_txtTageZurueck.Text.Trim(), out int tage))
                 config.TAGE_ZURUECK = tage;
@@ -357,25 +434,31 @@
             var testConfig = new AppConfig();
             UebertrageUiInConfig(testConfig);
 
-            if (string.IsNullOrWhiteSpace(testConfig.OAuthClientId))
+            if (!testConfig.ZugangsdatenVollstaendig(out string fehler))
             {
-                MessageBox.Show("Bitte zuerst die Client-ID aus Azure Entra ID eintragen.", "Hinweis", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show($"{fehler}\n\nBitte fülle die nötigen Felder aus.", "Hinweis", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
             _btnOAuthLogin.IsEnabled = false;
-            _btnOAuthLogin.Content = "Warte auf Anmeldung...";
+            _btnOAuthLogin.Content = "Teste Verbindung...";
 
             try
             {
-                var result = await OAuthService.HoleAccessTokenAsync(testConfig);
+                var emailService = new EmailService();
+                string ergebnis = await emailService.TesteVerbindungAsync(testConfig);
+
+                string zusatz = testConfig.IstOAuth
+                    ? "\n\nDas Token wurde verschlüsselt gespeichert."
+                    : string.Empty;
+
                 MessageBox.Show(
-                    $"Anmeldung erfolgreich als:\n{result.Account.Username}\n\nDas Token wurde verschlüsselt gespeichert. Vergiss nicht, die Einstellungen mit 'Speichern' zu sichern.",
-                    "OAuth2", MessageBoxButton.OK, MessageBoxImage.Information);
+                    $"{ergebnis}{zusatz}\n\nVergiss nicht, die Einstellungen mit 'Speichern' zu sichern.",
+                    "Verbindungstest", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Anmeldung fehlgeschlagen:\n{ex.Message}", "OAuth2", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"Anmeldung oder Test fehlgeschlagen:\n{ex.Message}", "Verbindungstest", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {
@@ -392,11 +475,11 @@
             try
             {
                 await OAuthService.AbmeldenAsync(testConfig);
-                MessageBox.Show("Gespeicherte Anmeldung wurde entfernt.", "OAuth2", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show("Gespeicherte Anmeldung wurde entfernt.", "Microsoft Graph", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Fehler beim Abmelden:\n{ex.Message}", "OAuth2", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"Fehler beim Abmelden:\n{ex.Message}", "Microsoft Graph", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 

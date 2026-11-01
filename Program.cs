@@ -40,9 +40,11 @@
                     return;
                 }
 
-                string modus = config.UseOAuth2 ? "OAuth2" : "Passwort";
-                Log.Information("Verbinde mit {Server} für Konto {Konto} (Anmeldung: {Modus})...", config.ImapServer, config.EmailKonto, modus);
-                Console.WriteLine($"Verbinde mit {config.ImapServer} für Konto {config.EmailKonto} (Anmeldung: {modus})...");
+                string modus = config.IstGraph ? "Microsoft Graph"
+                             : config.IstImapOAuth2 ? "IMAP mit OAuth2"
+                             : "IMAP mit Passwort";
+                Log.Information("Starte Abruf (Modus: {Modus})...", modus);
+                Console.WriteLine($"Starte Abruf (Modus: {modus})...");
                 Console.WriteLine($"Zielordner: {config.ZielOrdner}");
                 Console.WriteLine(new string('-', 50));
 

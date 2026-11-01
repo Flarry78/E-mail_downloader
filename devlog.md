@@ -114,3 +114,9 @@
 - Entra ID erstellt und Programm bei Azure regestriert
 - In den Settings vom Gui und der config.json die Einstellungen eingefügt wenn es sich um eine Outlook Email handelt mir Oauth2
 - Programm erweitert das nun auch Oauth2 funktioniert
+
+
+## 2026-11-01
+
+- Anhänge werden jetzt überprüft das keine exe oder zip files gedownloadet werden
+- Microsoft Graph API hinzugefügt

@@ -10,6 +10,7 @@
     using System.Windows.Controls;
     using System.Windows.Input;
     using System.Windows.Media;
+    using Microsoft.Web.WebView2.Core;
     using MimeKit;
     using Serilog;
     using email_csharp;
@@ -35,6 +36,40 @@
         private async Task InitializeWebViewAsync()
         {
             await EmailWebView.EnsureCoreWebView2Async();
+
+            var core = EmailWebView.CoreWebView2;
+
+            // E-Mails sind nicht vertrauenswürdiger Inhalt: keine Skripte, keine Skript-Dialoge, keine Host-Objekte
+            core.Settings.IsScriptEnabled = false;
+            core.Settings.AreDefaultScriptDialogsEnabled = false;
+            core.Settings.IsWebMessageEnabled = false;
+            core.Settings.AreHostObjectsAllowed = false;
+            core.Settings.AreDevToolsEnabled = false;
+
+            // Links in der Vorschau sind nicht anklickbar (kein Wegnavigieren aus der Vorschau)
+            core.NavigationStarting += (s, e) =>
+            {
+                if (e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase) ||
+                    e.Uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+                {
+                    e.Cancel = true;
+                }
+            };
+
+            // Keine Inhalte aus dem Internet nachladen (z. B. Tracking-Pixel, externe Bilder)
+            core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
+            core.WebResourceRequested += (s, e) =>
+            {
+                string uri = e.Request.Uri;
+                bool extern_ = uri.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                               uri.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+                bool lokal = uri.StartsWith("https://emailassets.local/", StringComparison.OrdinalIgnoreCase);
+
+                if (extern_ && !lokal)
+                {
+                    e.Response = core.Environment.CreateWebResourceResponse(null, 403, "Blocked", "");
+                }
+            };
         }
 
         private void LadeKonfiguration()
@@ -232,9 +267,11 @@
 
             try
             {
-                progressWindow.AppendLog(config.UseOAuth2
-                    ? "Starte Verbindung zum IMAP-Server (OAuth2)...\n"
-                    : "Starte Verbindung zum IMAP-Server...\n");
+                progressWindow.AppendLog(config.IstGraph
+                    ? "Starte Abruf über Microsoft Graph...\n"
+                    : config.IstImapOAuth2
+                        ? "Starte Verbindung zum IMAP-Server (OAuth2)...\n"
+                        : "Starte Verbindung zum IMAP-Server...\n");
 
                 var emailService = new EmailService();
                 var neueEmails = await emailService.FetchNewEmailsAsync(config.ImapServer, port, config.EmailKonto, config.Passwort, config.UnsortedOrdner);
@@ -244,7 +281,7 @@
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "❌ Fehler beim IMAP-Download: {Message}", ex.Message);
+                Log.Error(ex, "❌ Fehler beim E-Mail-Download: {Message}", ex.Message);
                 progressWindow.AppendLog($"\nFEHLER: {ex.Message}");
             }
             finally
@@ -265,6 +302,14 @@
                 {
                     if (EmailListView.SelectedItem is EmailPreviewModel selectedEmail)
                     {
+                        // Sicherheitsnetz: Nur freigegebene Dateitypen dürfen geöffnet werden
+                        if (!AppConfig.Laden().IstAnhangErlaubt(selectedFileName))
+                        {
+                            Log.Warning("Öffnen verweigert (Dateityp nicht freigegeben): {File}", selectedFileName);
+                            MessageBox.Show("Dieser Dateityp ist nicht freigegeben und wird aus Sicherheitsgründen nicht geöffnet.", "Gesperrt", MessageBoxButton.OK, MessageBoxImage.Warning);
+                            return;
+                        }
+
                         string fullPath = Path.Combine(selectedEmail.FilePath, selectedFileName);
 
                         if (File.Exists(fullPath))
@@ -362,7 +407,7 @@
                             EmailWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
                                 "emailassets.local",
                                 selectedEmail.FilePath,
-                                Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow);
+                                CoreWebView2HostResourceAccessKind.Allow);
 
                             EmailWebView.CoreWebView2.NavigateToString(htmlContent);
                         }
@@ -370,7 +415,7 @@
                     catch (Exception ex)
                     {
                         Log.Error(ex, "Fehler beim Rendern der E-Mail-Vorschau: {Message}", ex.Message);
-                        EmailWebView.CoreWebView2?.NavigateToString($"<html><body><h3>Fehler beim Laden der E-Mail-Vorschau:</h3><p>{ex.Message}</p></body></html>");
+                        EmailWebView.CoreWebView2?.NavigateToString($"<html><body><h3>Fehler beim Laden der E-Mail-Vorschau:</h3><p>{System.Net.WebUtility.HtmlEncode(ex.Message)}</p></body></html>");
                     }
                 }
             }
@@ -415,8 +460,8 @@
                 var emailService = new EmailService();
                 emailService.OrdnerEinsortierenUndLoeschen(selectedEmail.Id, selectedEmail.UniqueId, selectedEmail.FilePath, auftragsnummer, firma);
 
-                Log.Information("🚀 E-Mail erfolgreich einsortiert: Betreff='{Subject}', Absender='{Sender}', Firma/Ordner='{Firma}', Auftragsnummer='{Order}', Quellpfad='{Path}'",
-                    selectedEmail.Subject,
+                // Der Betreff wird bewusst nicht mehr ins Log geschrieben (kann vertrauliche Inhalte enthalten)
+                Log.Information("🚀 E-Mail erfolgreich einsortiert: Absender='{Sender}', Firma/Ordner='{Firma}', Auftragsnummer='{Order}', Quellpfad='{Path}'",
                     selectedEmail.SenderEmail,
                     firma,
                     auftragsnummer,
@@ -464,8 +509,7 @@
                 string ziel = emailService.OrdnerInArchivVerschieben(
                     selectedEmail.Id, selectedEmail.UniqueId, selectedEmail.FilePath, selectedEmail.Sender);
 
-                Log.Information("📦 E-Mail abgelegt: Betreff='{Subject}', Absender='{Sender}', Ziel='{Ziel}'",
-                    selectedEmail.Subject,
+                Log.Information("📦 E-Mail abgelegt: Absender='{Sender}', Ziel='{Ziel}'",
                     selectedEmail.SenderEmail,
                     ziel);
 
@@ -504,8 +548,7 @@
 
                     emailService.LoescheUnsortedEintrag(selectedEmail.Id);
 
-                    Log.Information("🗑️ E-Mail gelöscht (ohne Einsortieren): Betreff='{Subject}', Absender='{Sender}', Pfad='{Path}'",
-                        selectedEmail.Subject,
+                    Log.Information("🗑️ E-Mail gelöscht (ohne Einsortieren): Absender='{Sender}', Pfad='{Path}'",
                         selectedEmail.SenderEmail,
                         selectedEmail.FilePath);
 
@@ -547,10 +590,9 @@
 
                     emailService.LoescheUnsortedEintrag(selectedEmail.Id);
 
-                    Log.Warning("🚫 Absender blockiert und E-Mail entfernt: Absender='{SenderEmail}' ({SenderName}), Betreff='{Subject}'",
+                    Log.Warning("🚫 Absender blockiert und E-Mail entfernt: Absender='{SenderEmail}' ({SenderName})",
                         selectedEmail.SenderEmail,
-                        selectedEmail.Sender,
-                        selectedEmail.Subject);
+                        selectedEmail.Sender);
 
                     LeereDetailAnsichtUndAktualisiere();
                 }
