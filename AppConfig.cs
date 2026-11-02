@@ -19,15 +19,33 @@
         };
 
         /// <summary>
-        /// Diese Endungen werden IMMER blockiert, selbst wenn jemand sie in die Whitelist einträgt.
+        /// Standard-Sperrliste (Blacklist): Diese Endungen werden nie gespeichert, auch wenn sie in der
+        /// Whitelist stehen. Die Liste ist in der config.json und in den Einstellungen änderbar.
         /// </summary>
-        private static readonly HashSet<string> GesperrteEndungen = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        public static readonly string[] StandardGesperrteEndungen =
         {
             "exe", "com", "bat", "cmd", "scr", "pif", "msi", "msp", "dll", "sys",
             "js", "jse", "vbs", "vbe", "wsf", "wsh", "ps1", "psm1", "hta", "jar", "lnk", "reg", "cpl",
             "zip", "rar", "7z", "gz", "tar", "cab", "iso", "img",
             "docm", "xlsm", "pptm", "dotm", "xlam"
         };
+
+        /// <summary>
+        /// Dateitypen, die beim Doppelklick ein Programm oder Skript STARTEN würden.
+        /// Für diese fragt die App vor dem Öffnen immer nach.
+        /// </summary>
+        private static readonly HashSet<string> StartbareEndungen = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "exe", "com", "bat", "cmd", "scr", "pif", "msi", "msp", "dll",
+            "js", "jse", "vbs", "vbe", "wsf", "wsh", "ps1", "hta", "jar", "lnk", "reg", "cpl"
+        };
+
+        public static bool IstAusfuehrbar(string dateiname)
+        {
+            if (string.IsNullOrWhiteSpace(dateiname)) return false;
+            string endung = Path.GetExtension(dateiname.Trim()).TrimStart('.');
+            return StartbareEndungen.Contains(endung);
+        }
 
         [JsonPropertyName("ZielOrdner")]
         public string ZielOrdner { get; set; }
@@ -169,6 +187,11 @@
         [JsonPropertyName("ErlaubteAnhangEndungen")]
         public List<string> ErlaubteAnhangEndungen { get; set; } = new List<string>(StandardAnhangEndungen);
 
+        // Zusätzliche Sicherung: Diese Endungen haben Vorrang vor der Whitelist.
+        // Eine leere Liste bedeutet: keine zusätzliche Sperre, es gilt nur die Whitelist.
+        [JsonPropertyName("GesperrteAnhangEndungen")]
+        public List<string> GesperrteAnhangEndungen { get; set; } = new List<string>(StandardGesperrteEndungen);
+
         [JsonPropertyName("TAGE_ZURUECK")]
         public int TAGE_ZURUECK { get; set; } = 7;
 
@@ -179,8 +202,8 @@
         public int DELAY_MILLISEKUNDEN { get; set; } = 1000;
 
         /// <summary>
-        /// Prüft, ob ein Anhang gespeichert werden darf. Nur Endungen aus der Whitelist,
-        /// und niemals ausführbare Dateien oder Archive.
+        /// Prüft, ob ein Anhang gespeichert werden darf: Die Endung muss in der Whitelist stehen
+        /// und darf nicht in der Sperrliste (Blacklist) stehen. Die Sperrliste hat Vorrang.
         /// </summary>
         public bool IstAnhangErlaubt(string dateiname)
         {
@@ -188,13 +211,32 @@
 
             string endung = Path.GetExtension(dateiname.Trim()).TrimStart('.').ToLowerInvariant();
             if (string.IsNullOrEmpty(endung)) return false;
-            if (GesperrteEndungen.Contains(endung)) return false;
+
+            var gesperrt = GesperrteAnhangEndungen ?? new List<string>();
+            if (gesperrt.Any(g => string.Equals(g?.Trim().TrimStart('.'), endung, StringComparison.OrdinalIgnoreCase)))
+            {
+                return false;
+            }
 
             var erlaubt = (ErlaubteAnhangEndungen != null && ErlaubteAnhangEndungen.Count > 0)
                 ? ErlaubteAnhangEndungen
                 : new List<string>(StandardAnhangEndungen);
 
             return erlaubt.Any(e => string.Equals(e?.Trim().TrimStart('.'), endung, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Steht die Endung dieser Datei in der Sperrliste (Blacklist)?
+        /// </summary>
+        public bool IstEndungGesperrt(string dateiname)
+        {
+            if (string.IsNullOrWhiteSpace(dateiname)) return false;
+
+            string endung = Path.GetExtension(dateiname.Trim()).TrimStart('.').ToLowerInvariant();
+            if (string.IsNullOrEmpty(endung)) return false;
+
+            var gesperrt = GesperrteAnhangEndungen ?? new List<string>();
+            return gesperrt.Any(g => string.Equals(g?.Trim().TrimStart('.'), endung, StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>

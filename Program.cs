@@ -2,6 +2,7 @@
 {
     using System;
     using System.IO;
+    using System.Linq;
     using System.Threading.Tasks;
     using Serilog;
 
@@ -54,8 +55,9 @@
                 // E-Mails abrufen
                 var neueEmails = await emailService.FetchNewEmailsAsync(config.ImapServer, port, config.EmailKonto, config.Passwort, config.ZielOrdner);
 
-                Log.Information("Prozess erfolgreich abgeschlossen. {Count} neue E-Mails verarbeitet.", neueEmails.Count);
-                Console.WriteLine($"\n[Fertig] Prozess abgeschlossen. {neueEmails.Count} neue E-Mails verarbeitet.");
+                int nichtGespeichert = neueEmails.Sum(m => m.BlockedAttachments.Count);
+                Log.Information("Prozess erfolgreich abgeschlossen. {Count} neue E-Mails verarbeitet, {Blocked} Anhänge nicht gespeichert.", neueEmails.Count, nichtGespeichert);
+                Console.WriteLine($"\n[Fertig] Prozess abgeschlossen. {neueEmails.Count} neue E-Mails verarbeitet, {nichtGespeichert} Anhänge nicht gespeichert.");
             }
             catch (Exception ex)
             {

@@ -120,3 +120,9 @@
 
 - Anhänge werden jetzt überprüft das keine exe oder zip files gedownloadet werden
 - Microsoft Graph API hinzugefügt
+
+
+## 2026-11-02
+
+- whitelist und blacklist für anhänge eingefügt
+- falls anhänge abgelehnt werden wird es festgehalten

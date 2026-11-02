@@ -4,6 +4,7 @@
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
+    using System.Linq;
     using System.Text;
     using System.Threading.Tasks;
     using System.Windows;
@@ -276,8 +277,17 @@
                 var emailService = new EmailService();
                 var neueEmails = await emailService.FetchNewEmailsAsync(config.ImapServer, port, config.EmailKonto, config.Passwort, config.UnsortedOrdner);
 
-                Log.Information("📥 E-Mail-Download erfolgreich abgeschlossen. {Count} neue E-Mails heruntergeladen.", neueEmails.Count);
-                progressWindow.AppendLog($"\nFertig! {neueEmails.Count} neue E-Mails heruntergeladen.");
+                int nichtGespeichert = neueEmails.Sum(m => m.BlockedAttachments.Count);
+
+                Log.Information("📥 E-Mail-Download erfolgreich abgeschlossen. {Count} neue E-Mails heruntergeladen, {Blocked} Anhänge nicht gespeichert.",
+                    neueEmails.Count, nichtGespeichert);
+
+                string abschluss = $"\nFertig! {neueEmails.Count} neue E-Mails heruntergeladen.";
+                if (nichtGespeichert > 0)
+                {
+                    abschluss += $"\n⚠ {nichtGespeichert} Anhänge wurden nicht gespeichert (Details oben in der Zusammenfassung, in der Liste rot durchgestrichen).";
+                }
+                progressWindow.AppendLog(abschluss);
             }
             catch (Exception ex)
             {
@@ -310,6 +320,19 @@
                             return;
                         }
 
+                        // Programme und Skripte würden beim Öffnen GESTARTET werden: immer nachfragen
+                        if (AppConfig.IstAusfuehrbar(selectedFileName))
+                        {
+                            var antwort = MessageBox.Show(
+                                $"'{selectedFileName}' ist ein Programm bzw. Skript und würde beim Öffnen gestartet werden.\n\nMöchtest du es wirklich öffnen?",
+                                "Warnung", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+
+                            if (antwort != MessageBoxResult.Yes)
+                            {
+                                return;
+                            }
+                        }
+
                         string fullPath = Path.Combine(selectedEmail.FilePath, selectedFileName);
 
                         if (File.Exists(fullPath))
@@ -340,6 +363,10 @@
             {
                 TxtSubject.Text = $"Betreff: {selectedEmail.Subject}";
                 TxtSender.Text = $"Absender: {selectedEmail.Sender}  |  Datum: {selectedEmail.Date:dd.MM.yyyy HH:mm}";
+                if (selectedEmail.BlockedAttachments != null && selectedEmail.BlockedAttachments.Count > 0)
+                {
+                    TxtSender.Text += $"  |  ⚠ {selectedEmail.BlockedAttachments.Count} Anhang/Anhänge nicht gespeichert";
+                }
 
                 try
                 {

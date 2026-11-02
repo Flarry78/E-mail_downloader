@@ -31,7 +31,7 @@
                             <TextBlock Text="{Binding SenderEmail}" FontSize="11" Foreground="#FF0066CC" TextTrimming="CharacterEllipsis" Margin="0,1,0,1"/>
                             <TextBlock Text="{Binding Subject}" FontSize="11" Foreground="#FF555555" TextTrimming="CharacterEllipsis" Margin="0,0,0,4"/>
 
-                            <!-- Blatt-Papier-Kacheln für Anhänge -->
+                            <!-- Blatt-Papier-Kacheln für gespeicherte Anhänge -->
                             <ItemsControl ItemsSource="{Binding Attachments}" Margin="0,2,0,0">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
@@ -59,6 +59,47 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+
+                            <!-- Nicht gespeicherte (blockierte) Anhänge: rot und durchgestrichen, Grund im Tooltip -->
+                            <ItemsControl ItemsSource="{Binding BlockedAttachments}" Margin="0,0,0,0">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel Orientation="Horizontal"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="#FFFDECEA" BorderBrush="#FFDC3545" BorderThickness="1.5" CornerRadius="4" Padding="6,6" Margin="0,0,6,6"
+                                                Width="130" Height="48"
+                                                ToolTip="{Binding Reason}">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="🚫" FontSize="18" Margin="0,0,6,0" VerticalAlignment="Center"/>
+
+                                                <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="10" Foreground="#FFDC3545" FontWeight="SemiBold"
+                                                           TextDecorations="Strikethrough"
+                                                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" MaxHeight="36"/>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- Hinweis, welche E-Mail betroffen ist (nur sichtbar, wenn etwas nicht gespeichert wurde) -->
+                            <TextBlock Text="{Binding BlockedHinweis}" FontSize="10" FontWeight="SemiBold" Foreground="#FFDC3545" Margin="0,0,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding BlockedHinweis}" Value="">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
                         </StackPanel>
                     </DataTemplate>
                 </ListView.ItemTemplate>
@@ -94,7 +135,7 @@
 
                         <!-- Rechte obere Ecke: Ablegen (abseits der Aktionsbuttons) sowie Einstellungen & Logs -->
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
-                            <!-- NEU: Ablegen im Archiv-Ordner, bewusst von Einsortieren/Blockieren/Löschen getrennt -->
+                            <!-- Ablegen im Archiv-Ordner, bewusst von Einsortieren/Blockieren/Löschen getrennt -->
                             <Button x:Name="BtnArchive" Content="📦 Ablegen" Width="95" Height="30" Margin="0,0,24,0"
                                     Background="#FF17A2B8" Foreground="White" FontWeight="Bold" Click="BtnArchive_Click"/>
                             <Button x:Name="BtnSettings" Content="⚙️ Einstellungen" Width="110" Height="30" Margin="0,0,8,0"

@@ -24,6 +24,7 @@
         private CheckBox _chkNurUngelesene;
         private TextBox _txtDelay;
         private TextBox _txtAnhangEndungen;
+        private TextBox _txtGesperrteEndungen;
 
         // Anmeldeart und OAuth2
         private ComboBox _cmbAnmeldeart;
@@ -158,7 +159,21 @@
             Grid.SetRow(stackPw, row++);
             gridSettings.Children.Add(stackPw);
 
-            FügeEingabeZeileSimple(gridSettings, row++, "Erlaubte Anhang-Endungen (mit Komma getrennt):", out _txtAnhangEndungen);
+            FügeEingabeZeileSimple(gridSettings, row++, "Erlaubte Anhang-Endungen (Whitelist, mit Komma getrennt):", out _txtAnhangEndungen);
+            FügeEingabeZeileSimple(gridSettings, row++, "Immer gesperrte Endungen (Blacklist, hat Vorrang vor der Whitelist):", out _txtGesperrteEndungen);
+
+            var hinweisAnhang = new TextBlock
+            {
+                Text = "Was nicht in der Whitelist steht, wird nie gespeichert. Die Blacklist ist ein zusätzlicher Schutz. Wer z. B. ZIP-Dateien möchte, trägt 'zip' in die Whitelist ein und nimmt es aus der Blacklist. Blacklist leer = nur die Whitelist gilt. Whitelist leer + Speichern = Standardliste.",
+                FontSize = 11,
+                Foreground = Brushes.Gray,
+                TextWrapping = TextWrapping.Wrap,
+                Width = 500,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            Grid.SetRow(hinweisAnhang, row++);
+            gridSettings.Children.Add(hinweisAnhang);
             FügeEingabeZeileSimple(gridSettings, row++, "Tage zurück (Abrufzeitraum):", out _txtTageZurueck);
             FügeEingabeZeileSimple(gridSettings, row++, "Delay zwischen Mails (Millisekunden):", out _txtDelay);
 
@@ -329,6 +344,7 @@
                             (config.ErlaubteAnhangEndungen != null && config.ErlaubteAnhangEndungen.Count > 0)
                                 ? config.ErlaubteAnhangEndungen
                                 : new List<string>(AppConfig.StandardAnhangEndungen));
+                        _txtGesperrteEndungen.Text = string.Join(", ", config.GesperrteAnhangEndungen ?? new List<string>());
                         _txtTageZurueck.Text = config.TAGE_ZURUECK.ToString();
                         _chkNurUngelesene.IsChecked = config.NUR_UNGELESENE;
                         _txtDelay.Text = config.DELAY_MILLISEKUNDEN.ToString();
@@ -344,6 +360,7 @@
                 _cmbAnmeldeart.SelectedIndex = 0;
                 _txtOAuthTenantId.Text = "common";
                 _txtAnhangEndungen.Text = string.Join(", ", AppConfig.StandardAnhangEndungen);
+                _txtGesperrteEndungen.Text = string.Join(", ", AppConfig.StandardGesperrteEndungen);
                 _txtTageZurueck.Text = "7";
                 _chkNurUngelesene.IsChecked = false;
                 _txtDelay.Text = "1500";
@@ -419,6 +436,14 @@
                 .Distinct()
                 .ToList();
             config.ErlaubteAnhangEndungen = endungen.Count > 0 ? endungen : new List<string>(AppConfig.StandardAnhangEndungen);
+
+            // Sperrliste: leer bedeutet bewusst "keine zusätzliche Sperre"
+            config.GesperrteAnhangEndungen = _txtGesperrteEndungen.Text
+                .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => x.Trim().TrimStart('.').ToLowerInvariant())
+                .Where(x => x.Length > 0)
+                .Distinct()
+                .ToList();
 
             if (int.TryParse(_txtTageZurueck.Text.Trim(), out int tage))
                 config.TAGE_ZURUECK = tage;

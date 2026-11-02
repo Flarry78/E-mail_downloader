@@ -62,6 +62,28 @@
                 {
                     command.ExecuteNonQuery();
                 }
+
+                // Spalte für nicht gespeicherte Anhänge nachrüsten (alte Datenbanken haben sie noch nicht)
+                bool spalteVorhanden = false;
+                using (var pragma = new SqliteCommand("PRAGMA table_info(unsorted_emails);", connection))
+                using (var reader = pragma.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        if (string.Equals(reader.GetString(1), "blocked_attachments", StringComparison.OrdinalIgnoreCase))
+                        {
+                            spalteVorhanden = true;
+                        }
+                    }
+                }
+
+                if (!spalteVorhanden)
+                {
+                    using (var alter = new SqliteCommand("ALTER TABLE unsorted_emails ADD COLUMN blocked_attachments TEXT;", connection))
+                    {
+                        alter.ExecuteNonQuery();
+                    }
+                }
             }
             Console.WriteLine("[Datenbank] SQLite-Tabellen initialisiert.");
         }
@@ -185,14 +207,14 @@
             }
         }
 
-        private void SpeichereUnsortedEmailInDb(string uniqueId, string sender, string senderEmail, string subject, DateTime date, string ordnerPfad)
+        private void SpeichereUnsortedEmailInDb(string uniqueId, string sender, string senderEmail, string subject, DateTime date, string ordnerPfad, string blockierteAnhaenge)
         {
             using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
             {
                 connection.Open();
                 string query = @"
-                INSERT OR REPLACE INTO unsorted_emails (unique_id, sender, sender_email, subject, date, file_path)
-                VALUES (@uid, @sender, @email, @subject, @date, @path);";
+                INSERT OR REPLACE INTO unsorted_emails (unique_id, sender, sender_email, subject, date, file_path, blocked_attachments)
+                VALUES (@uid, @sender, @email, @subject, @date, @path, @blocked);";
 
                 using (var cmd = new SqliteCommand(query, connection))
                 {
@@ -202,6 +224,7 @@
                     cmd.Parameters.AddWithValue("@subject", subject);
                     cmd.Parameters.AddWithValue("@date", date.ToString("o"));
                     cmd.Parameters.AddWithValue("@path", ordnerPfad);
+                    cmd.Parameters.AddWithValue("@blocked", (object)blockierteAnhaenge ?? DBNull.Value);
                     cmd.ExecuteNonQuery();
                 }
             }
@@ -215,7 +238,7 @@
             using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
             {
                 connection.Open();
-                string query = "SELECT id, unique_id, sender, sender_email, subject, date, file_path FROM unsorted_emails ORDER BY date DESC;";
+                string query = "SELECT id, unique_id, sender, sender_email, subject, date, file_path, blocked_attachments FROM unsorted_emails ORDER BY date DESC;";
 
                 using (var cmd = new SqliteCommand(query, connection))
                 {
@@ -244,7 +267,8 @@
                                     Subject = reader.GetString(4),
                                     Date = DateTime.Parse(reader.GetString(5)),
                                     FilePath = filePath,
-                                    Attachments = anhaenge
+                                    Attachments = anhaenge,
+                                    BlockedAttachments = ParseBlockierte(reader.IsDBNull(7) ? null : reader.GetString(7))
                                 });
                             }
                             else
@@ -489,12 +513,19 @@
 
             try
             {
+                List<EmailPreviewModel> ergebnis;
+
                 if (config.IstGraph)
                 {
-                    return await FetchViaGraphAsync(config, unsortedOrdnerPfad, tageZurueck, nurUngelesene, delayMs);
+                    ergebnis = await FetchViaGraphAsync(config, unsortedOrdnerPfad, tageZurueck, nurUngelesene, delayMs);
+                }
+                else
+                {
+                    ergebnis = await FetchViaImapAsync(config, imapServer, port, email, appPassword, unsortedOrdnerPfad, tageZurueck, nurUngelesene, delayMs);
                 }
 
-                return await FetchViaImapAsync(config, imapServer, port, email, appPassword, unsortedOrdnerPfad, tageZurueck, nurUngelesene, delayMs);
+                SchreibeZusammenfassung(ergebnis);
+                return ergebnis;
             }
             finally
             {
@@ -764,33 +795,70 @@
                 }
             }
 
-            // 2) Nur erlaubte Anhänge speichern, alle anderen verwerfen
+            // 2) Nur erlaubte Anhänge speichern, alle anderen verwerfen (und festhalten)
             var anhaengeNamen = new List<string>();
             var belegteNamen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "email.eml" };
             var zuEntfernen = new List<int>();
+            var blockierte = new List<BlockedAttachmentModel>();
 
             for (int i = 0; i < kandidaten.Count; i++)
             {
                 var part = kandidaten[i];
                 string sauberName = SaubererDateiname(part.FileName);
+                string grund = null;
+                byte[] daten = null;
 
-                if (!config.IstAnhangErlaubt(sauberName))
+                // 1) Sperrliste hat immer Vorrang (z. B. exe), da wird nicht einmal der Inhalt gelesen
+                if (config.IstEndungGesperrt(sauberName))
                 {
-                    Console.WriteLine($"[Anhang] Nicht gespeichert (Dateityp nicht freigegeben): {sauberName}");
-                    zuEntfernen.Add(i);
-                    continue;
+                    grund = "Dateityp gesperrt (Blacklist)";
+                }
+                else
+                {
+                    using (var memoryStream = new MemoryStream())
+                    {
+                        await part.Content.DecodeToAsync(memoryStream);
+                        daten = memoryStream.ToArray();
+                    }
+
+                    // 2) Ein Windows-Programm wird immer verworfen, egal wie die Datei heißt
+                    //    (außer exe ist in den Einstellungen ausdrücklich freigegeben)
+                    if (IstProgrammdatei(daten) && !config.IstAnhangErlaubt("datei.exe"))
+                    {
+                        grund = "Inhalt ist ein Windows-Programm";
+                    }
+                    else if (config.IstAnhangErlaubt(sauberName))
+                    {
+                        // 3) Endung steht in der Whitelist: Der Inhalt muss dazu passen
+                        if (!InhaltPasstZurEndung(Path.GetExtension(sauberName), daten))
+                        {
+                            grund = "Inhalt passt nicht zur Endung";
+                        }
+                    }
+                    else
+                    {
+                        // 4) Endung fehlt oder ist unbekannt (z. B. "Rechnung" oder "Rechnung 01.10.2026"):
+                        //    den echten Typ am Inhalt erkennen und die richtige Endung ergänzen
+                        string erkannt = ErkenneEndungAnInhalt(daten);
+                        if (erkannt != null && config.IstAnhangErlaubt("datei." + erkannt))
+                        {
+                            Console.WriteLine($"[Anhang] Endung ergänzt: {sauberName} -> .{erkannt}");
+                            sauberName = sauberName + "." + erkannt;
+                        }
+                        else
+                        {
+                            grund = "Dateityp nicht freigegeben (Whitelist)";
+                        }
+                    }
                 }
 
-                byte[] daten;
-                using (var memoryStream = new MemoryStream())
+                if (grund != null)
                 {
-                    await part.Content.DecodeToAsync(memoryStream);
-                    daten = memoryStream.ToArray();
-                }
+                    Console.WriteLine($"[Anhang] NICHT gespeichert: {sauberName} ({grund})");
+                    Serilog.Log.Warning("Anhang nicht gespeichert: Absender='{Absender}', Datei='{Datei}', Grund='{Grund}'",
+                        absenderEmail, sauberName, grund);
 
-                if (!InhaltPasstZurEndung(Path.GetExtension(sauberName), daten))
-                {
-                    Console.WriteLine($"[Anhang] Nicht gespeichert (Inhalt passt nicht zur Endung): {sauberName}");
+                    blockierte.Add(new BlockedAttachmentModel { Name = sauberName, Reason = grund });
                     zuEntfernen.Add(i);
                     continue;
                 }
@@ -810,7 +878,7 @@
             string emlPfad = Path.Combine(zielOrdnerPfad, "email.eml");
             await message.WriteToAsync(emlPfad);
 
-            SpeichereUnsortedEmailInDb(uniqueId, absenderName, absenderEmail, betreff, datum, zielOrdnerPfad);
+            SpeichereUnsortedEmailInDb(uniqueId, absenderName, absenderEmail, betreff, datum, zielOrdnerPfad, SerialisiereBlockierte(blockierte));
 
             return new EmailPreviewModel
             {
@@ -820,8 +888,96 @@
                 Subject = betreff,
                 Date = datum,
                 FilePath = zielOrdnerPfad,
-                Attachments = anhaengeNamen
+                Attachments = anhaengeNamen,
+                BlockedAttachments = blockierte
             };
+        }
+
+        /// <summary>
+        /// Erkennt den echten Dateityp am Inhalt (nicht am Namen). Nur eindeutige Formate:
+        /// PDF, JPEG, PNG, GIF, TIFF und WebP. Alles andere (z. B. CAD ohne Endung, Text) gilt als
+        /// nicht erkennbar und liefert null. BMP ist bewusst nicht dabei, weil der Header nur 2 Zeichen lang ist.
+        /// </summary>
+        private static string ErkenneEndungAnInhalt(byte[] daten)
+        {
+            string[] kandidaten = { "pdf", "jpg", "png", "gif", "tif", "webp" };
+            foreach (string endung in kandidaten)
+            {
+                if (InhaltPasstZurEndung(endung, daten))
+                {
+                    return endung;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Erkennt ein Windows-Programm (exe, dll, scr ...) am Inhalt: Die Datei beginnt mit "MZ" und
+        /// enthält an der im Kopf angegebenen Stelle die Kennung "PE". Der Dateiname spielt keine Rolle.
+        /// </summary>
+        private static bool IstProgrammdatei(byte[] daten)
+        {
+            if (daten == null || daten.Length < 64) return false;
+            if (daten[0] != 0x4D || daten[1] != 0x5A) return false; // "MZ"
+
+            int peOffset = BitConverter.ToInt32(daten, 0x3C);
+            if (peOffset < 0 || peOffset > daten.Length - 4) return false;
+
+            return daten[peOffset] == 0x50 && daten[peOffset + 1] == 0x45
+                   && daten[peOffset + 2] == 0x00 && daten[peOffset + 3] == 0x00; // "PE\0\0"
+        }
+
+        // Nicht gespeicherte Anhänge: pro Eintrag "Name<TAB>Grund", Einträge durch Zeilenumbruch getrennt.
+        // Dateinamen sind bereits bereinigt und enthalten weder Tab noch Zeilenumbruch.
+        private static string SerialisiereBlockierte(List<BlockedAttachmentModel> liste)
+        {
+            if (liste == null || liste.Count == 0) return null;
+            return string.Join("\n", liste.Select(b => b.Name + "\t" + b.Reason));
+        }
+
+        private static List<BlockedAttachmentModel> ParseBlockierte(string text)
+        {
+            var ergebnis = new List<BlockedAttachmentModel>();
+            if (string.IsNullOrEmpty(text)) return ergebnis;
+
+            foreach (string zeile in text.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string[] teile = zeile.Split('\t');
+                ergebnis.Add(new BlockedAttachmentModel
+                {
+                    Name = teile[0],
+                    Reason = teile.Length > 1 ? teile[1] : string.Empty
+                });
+            }
+            return ergebnis;
+        }
+
+        /// <summary>
+        /// Schreibt am Ende des Abrufs auf, wie viele Anhänge nicht gespeichert wurden und bei welchen E-Mails.
+        /// Die Ausgabe erscheint im Fortschrittsfenster und (als Warnung) im Logfile.
+        /// </summary>
+        private static void SchreibeZusammenfassung(List<EmailPreviewModel> neu)
+        {
+            int anzahl = neu.Sum(m => m.BlockedAttachments.Count);
+            if (anzahl == 0)
+            {
+                Console.WriteLine("[Zusammenfassung] Alle Anhänge wurden gespeichert.");
+                return;
+            }
+
+            int mails = neu.Count(m => m.BlockedAttachments.Count > 0);
+            Console.WriteLine($"\n[Zusammenfassung] Nicht gespeicherte Anhänge: {anzahl} (aus {mails} E-Mails)");
+
+            foreach (var mail in neu.Where(m => m.BlockedAttachments.Count > 0))
+            {
+                Console.WriteLine($"  E-Mail von {mail.Sender} ({mail.SenderEmail}):");
+                foreach (var b in mail.BlockedAttachments)
+                {
+                    Console.WriteLine($"    - {b.Name}: {b.Reason}");
+                }
+            }
+
+            Serilog.Log.Warning("Zusammenfassung: {Anzahl} Anhänge aus {Mails} E-Mails wurden nicht gespeichert.", anzahl, mails);
         }
 
         private static bool IstAnhang(MimePart part)
@@ -967,6 +1123,25 @@
                 return true;
             }
 
+            // Falls jemand Archive oder Office-Dateien in der Whitelist freigibt: Header muss passen
+            if (e == "zip" || e == "docx" || e == "xlsx" || e == "pptx")
+            {
+                // "PK\x03\x04" (oder leeres Archiv "PK\x05\x06")
+                return daten.Length >= 4 && daten[0] == 0x50 && daten[1] == 0x4B
+                       && ((daten[2] == 0x03 && daten[3] == 0x04) || (daten[2] == 0x05 && daten[3] == 0x06));
+            }
+
+            if (e == "rar")
+            {
+                // "Rar!"
+                return daten.Length >= 4 && daten[0] == 0x52 && daten[1] == 0x61 && daten[2] == 0x72 && daten[3] == 0x21;
+            }
+
+            if (e == "7z")
+            {
+                return daten.Length >= 4 && daten[0] == 0x37 && daten[1] == 0x7A && daten[2] == 0xBC && daten[3] == 0xAF;
+            }
+
             return true;
         }
     }
@@ -981,6 +1156,25 @@
         public DateTime Date { get; set; }
         public string FilePath { get; set; }
         public List<string> Attachments { get; set; } = new List<string>();
+
+        // Anhänge, die NICHT gespeichert wurden (mit Grund), für die rote Markierung in der Liste
+        public List<BlockedAttachmentModel> BlockedAttachments { get; set; } = new List<BlockedAttachmentModel>();
+
+        public string BlockedHinweis
+        {
+            get
+            {
+                int n = BlockedAttachments?.Count ?? 0;
+                if (n == 0) return string.Empty;
+                return n == 1 ? "⚠ 1 Anhang nicht gespeichert" : $"⚠ {n} Anhänge nicht gespeichert";
+            }
+        }
+    }
+
+    public class BlockedAttachmentModel
+    {
+        public string Name { get; set; }
+        public string Reason { get; set; }
     }
 
     public class BlockedSenderModel
