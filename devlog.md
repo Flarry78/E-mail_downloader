@@ -126,3 +126,11 @@
 
 - whitelist und blacklist für anhänge eingefügt
 - falls anhänge abgelehnt werden wird es festgehalten
+
+
+## 2026-11-03
+
+- whitelist und blacklist kann flexibler bearbeitet werden
+- in der gui einstellbar
+- anhänge können aufgeklappt werden in der gui
+- anhänge die nicht gedownlaodet wurden, werden rot markiert

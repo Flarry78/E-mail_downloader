@@ -2,6 +2,7 @@
 {
     using System;
     using System.Collections.Generic;
+    using System.ComponentModel;
     using System.IO;
     using System.Linq;
     using System.Security.Cryptography;
@@ -808,8 +809,9 @@
                 string grund = null;
                 byte[] daten = null;
 
-                // 1) Sperrliste hat immer Vorrang (z. B. exe), da wird nicht einmal der Inhalt gelesen
-                if (config.IstEndungGesperrt(sauberName))
+                // 1) Sperrliste hat Vorrang (z. B. exe), da wird nicht einmal der Inhalt gelesen.
+                //    Nur im Modus "Alles erlauben" gibt es keine Sperrliste.
+                if (!config.IstAllesErlauben && config.IstEndungGesperrt(sauberName))
                 {
                     grund = "Dateityp gesperrt (Blacklist)";
                 }
@@ -821,33 +823,47 @@
                         daten = memoryStream.ToArray();
                     }
 
-                    // 2) Ein Windows-Programm wird immer verworfen, egal wie die Datei heißt
-                    //    (außer exe ist in den Einstellungen ausdrücklich freigegeben)
+                    // 2) Ein Windows-Programm wird verworfen, egal wie die Datei heißt,
+                    //    außer exe ist ausdrücklich erlaubt (Modus "Alles erlauben" oder exe nicht gesperrt)
                     if (IstProgrammdatei(daten) && !config.IstAnhangErlaubt("datei.exe"))
                     {
                         grund = "Inhalt ist ein Windows-Programm";
                     }
-                    else if (config.IstAnhangErlaubt(sauberName))
+                    else if (config.IstNurWhitelist)
                     {
-                        // 3) Endung steht in der Whitelist: Der Inhalt muss dazu passen
-                        if (!InhaltPasstZurEndung(Path.GetExtension(sauberName), daten))
+                        if (config.IstAnhangErlaubt(sauberName))
                         {
-                            grund = "Inhalt passt nicht zur Endung";
+                            // 3) Endung steht in der Whitelist: Der Inhalt muss dazu passen
+                            if (!InhaltPasstZurEndung(Path.GetExtension(sauberName), daten))
+                            {
+                                grund = "Inhalt passt nicht zur Endung";
+                            }
+                        }
+                        else
+                        {
+                            // 4) Endung fehlt oder ist unbekannt (z. B. "Rechnung" oder "Rechnung 01.10.2026"):
+                            //    den echten Typ am Inhalt erkennen und die richtige Endung ergänzen
+                            string erkannt = ErkenneEndungAnInhalt(daten);
+                            if (erkannt != null && config.IstAnhangErlaubt("datei." + erkannt))
+                            {
+                                Console.WriteLine($"[Anhang] Endung ergänzt: {sauberName} -> .{erkannt}");
+                                sauberName = sauberName + "." + erkannt;
+                            }
+                            else
+                            {
+                                grund = "Dateityp nicht freigegeben (Whitelist)";
+                            }
                         }
                     }
-                    else
+                    else if (string.IsNullOrEmpty(Path.GetExtension(sauberName)))
                     {
-                        // 4) Endung fehlt oder ist unbekannt (z. B. "Rechnung" oder "Rechnung 01.10.2026"):
-                        //    den echten Typ am Inhalt erkennen und die richtige Endung ergänzen
+                        // Modus "Alles außer Blacklist" / "Alles erlauben": Es wird nichts verworfen,
+                        // nur eine fehlende Endung wird (wenn der Typ eindeutig ist) ergänzt
                         string erkannt = ErkenneEndungAnInhalt(daten);
                         if (erkannt != null && config.IstAnhangErlaubt("datei." + erkannt))
                         {
                             Console.WriteLine($"[Anhang] Endung ergänzt: {sauberName} -> .{erkannt}");
                             sauberName = sauberName + "." + erkannt;
-                        }
-                        else
-                        {
-                            grund = "Dateityp nicht freigegeben (Whitelist)";
                         }
                     }
                 }
@@ -1146,8 +1162,27 @@
         }
     }
 
-    public class EmailPreviewModel
+    public class EmailPreviewModel : INotifyPropertyChanged
     {
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        // Ist die Anhangsliste dieser E-Mail in der Übersicht aufgeklappt?
+        private bool _istAufgeklappt;
+
+        public bool IstAufgeklappt
+        {
+            get => _istAufgeklappt;
+            set
+            {
+                if (_istAufgeklappt == value) return;
+                _istAufgeklappt = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IstAufgeklappt)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AufklappSymbol)));
+            }
+        }
+
+        public string AufklappSymbol => _istAufgeklappt ? "▲" : "▼";
+
         public int Id { get; set; }
         public string UniqueId { get; set; }
         public string Sender { get; set; }
@@ -1169,6 +1204,17 @@
                 return n == 1 ? "⚠ 1 Anhang nicht gespeichert" : $"⚠ {n} Anhänge nicht gespeichert";
             }
         }
+
+        // Für die aufklappbare Anhangsanzeige in der Liste
+        public bool HatAnhaenge => (Attachments?.Count ?? 0) + (BlockedAttachments?.Count ?? 0) > 0;
+
+        public string AnhangOkText => (Attachments?.Count ?? 0) == 0
+            ? string.Empty
+            : $"📎 {Attachments.Count} gespeichert";
+
+        public string AnhangBlockedText => (BlockedAttachments?.Count ?? 0) == 0
+            ? string.Empty
+            : $"🚫 {BlockedAttachments.Count} nicht gespeichert";
     }
 
     public class BlockedAttachmentModel

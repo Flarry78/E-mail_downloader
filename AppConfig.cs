@@ -192,6 +192,27 @@
         [JsonPropertyName("GesperrteAnhangEndungen")]
         public List<string> GesperrteAnhangEndungen { get; set; } = new List<string>(StandardGesperrteEndungen);
 
+        // Filter-Modus für Anhänge:
+        //   NurWhitelist         = nur freigegebene Dateitypen speichern (Standard, empfohlen)
+        //   AllesAusserBlacklist = alles speichern, was nicht in der Sperrliste steht
+        //   AllesErlauben        = keine Filterung (auch Programme und Skripte werden gespeichert)
+        public const string FilterNurWhitelist = "NurWhitelist";
+        public const string FilterAllesAusserBlacklist = "AllesAusserBlacklist";
+        public const string FilterAllesErlauben = "AllesErlauben";
+
+        [JsonPropertyName("AnhangFilter")]
+        public string AnhangFilter { get; set; } = FilterNurWhitelist;
+
+        [JsonIgnore]
+        public bool IstAllesErlauben => string.Equals(AnhangFilter, FilterAllesErlauben, StringComparison.OrdinalIgnoreCase);
+
+        [JsonIgnore]
+        public bool IstAllesAusserBlacklist => string.Equals(AnhangFilter, FilterAllesAusserBlacklist, StringComparison.OrdinalIgnoreCase);
+
+        // Unbekannte Werte gelten aus Sicherheitsgründen als "NurWhitelist"
+        [JsonIgnore]
+        public bool IstNurWhitelist => !IstAllesErlauben && !IstAllesAusserBlacklist;
+
         [JsonPropertyName("TAGE_ZURUECK")]
         public int TAGE_ZURUECK { get; set; } = 7;
 
@@ -208,6 +229,12 @@
         public bool IstAnhangErlaubt(string dateiname)
         {
             if (string.IsNullOrWhiteSpace(dateiname)) return false;
+
+            // Modus "Alles erlauben": nichts wird nach Endung gefiltert
+            if (IstAllesErlauben) return true;
+
+            // Modus "Alles außer Blacklist": erlaubt ist alles, was nicht gesperrt ist
+            if (IstAllesAusserBlacklist) return !IstEndungGesperrt(dateiname);
 
             string endung = Path.GetExtension(dateiname.Trim()).TrimStart('.').ToLowerInvariant();
             if (string.IsNullOrEmpty(endung)) return false;

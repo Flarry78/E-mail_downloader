@@ -25,6 +25,9 @@
         private TextBox _txtDelay;
         private TextBox _txtAnhangEndungen;
         private TextBox _txtGesperrteEndungen;
+        private ComboBox _cmbAnhangFilter;
+        private TextBlock _txtAnhangHinweis;
+        private int _filterUrspruenglich = 0;
 
         // Anmeldeart und OAuth2
         private ComboBox _cmbAnmeldeart;
@@ -50,6 +53,7 @@
             ErstelleUiLayout();
             LadeWerteAusConfig();
             AktualisiereFelder();
+            AktualisiereAnhangFilter();
             LadeBlockierteAbsender();
         }
 
@@ -159,10 +163,31 @@
             Grid.SetRow(stackPw, row++);
             gridSettings.Children.Add(stackPw);
 
+            // --- Filter-Modus für Anhänge ---
+            var stackFilter = new StackPanel { Margin = new Thickness(0, 4, 0, 8) };
+            stackFilter.Children.Add(new TextBlock
+            {
+                Text = "Anhang-Filter (Modus):",
+                FontWeight = FontWeights.Bold,
+                FontSize = 12,
+                Margin = new Thickness(0, 0, 0, 2)
+            });
+
+            _cmbAnhangFilter = new ComboBox { Width = 500, Height = 26, HorizontalAlignment = HorizontalAlignment.Left };
+            _cmbAnhangFilter.Items.Add("Nur Whitelist (empfohlen): nur freigegebene Dateitypen speichern");
+            _cmbAnhangFilter.Items.Add("Alles außer Blacklist: alles speichern, was nicht gesperrt ist");
+            _cmbAnhangFilter.Items.Add("Alles erlauben: keine Filterung (auch Programme und Skripte!)");
+            _cmbAnhangFilter.SelectedIndex = 0;
+            _cmbAnhangFilter.SelectionChanged += (s, e) => AktualisiereAnhangFilter();
+            stackFilter.Children.Add(_cmbAnhangFilter);
+
+            Grid.SetRow(stackFilter, row++);
+            gridSettings.Children.Add(stackFilter);
+
             FügeEingabeZeileSimple(gridSettings, row++, "Erlaubte Anhang-Endungen (Whitelist, mit Komma getrennt):", out _txtAnhangEndungen);
             FügeEingabeZeileSimple(gridSettings, row++, "Immer gesperrte Endungen (Blacklist, hat Vorrang vor der Whitelist):", out _txtGesperrteEndungen);
 
-            var hinweisAnhang = new TextBlock
+            _txtAnhangHinweis = new TextBlock
             {
                 Text = "Was nicht in der Whitelist steht, wird nie gespeichert. Die Blacklist ist ein zusätzlicher Schutz. Wer z. B. ZIP-Dateien möchte, trägt 'zip' in die Whitelist ein und nimmt es aus der Blacklist. Blacklist leer = nur die Whitelist gilt. Whitelist leer + Speichern = Standardliste.",
                 FontSize = 11,
@@ -172,8 +197,8 @@
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Margin = new Thickness(0, 0, 0, 10)
             };
-            Grid.SetRow(hinweisAnhang, row++);
-            gridSettings.Children.Add(hinweisAnhang);
+            Grid.SetRow(_txtAnhangHinweis, row++);
+            gridSettings.Children.Add(_txtAnhangHinweis);
             FügeEingabeZeileSimple(gridSettings, row++, "Tage zurück (Abrufzeitraum):", out _txtTageZurueck);
             FügeEingabeZeileSimple(gridSettings, row++, "Delay zwischen Mails (Millisekunden):", out _txtDelay);
 
@@ -320,6 +345,33 @@
             }
         }
 
+        /// <summary>
+        /// Sperrt die Endungs-Felder, die im gewählten Anhang-Filter keine Rolle spielen, und zeigt einen Hinweis.
+        /// </summary>
+        private void AktualisiereAnhangFilter()
+        {
+            if (_cmbAnhangFilter == null || _txtAnhangEndungen == null ||
+                _txtGesperrteEndungen == null || _txtAnhangHinweis == null) return;
+
+            int modus = _cmbAnhangFilter.SelectedIndex; // 0 = nur Whitelist, 1 = alles außer Blacklist, 2 = alles erlauben
+
+            _txtAnhangEndungen.IsEnabled = modus == 0;
+            _txtGesperrteEndungen.IsEnabled = modus == 0 || modus == 1;
+
+            switch (modus)
+            {
+                case 1:
+                    _txtAnhangHinweis.Text = "Gespeichert wird alles, was nicht in der Blacklist steht. Die Whitelist wird ignoriert. Windows-Programme werden weiterhin verworfen, solange 'exe' in der Blacklist steht.";
+                    break;
+                case 2:
+                    _txtAnhangHinweis.Text = "Es wird NICHTS gefiltert, auch Programme (exe) und Skripte werden gespeichert. Beim Öffnen fragt die App für solche Dateien weiterhin nach.";
+                    break;
+                default:
+                    _txtAnhangHinweis.Text = "Was nicht in der Whitelist steht, wird nie gespeichert. Die Blacklist ist ein zusätzlicher Schutz und hat Vorrang. Wer z. B. ZIP-Dateien möchte, trägt 'zip' in die Whitelist ein und nimmt es aus der Blacklist. Whitelist leer + Speichern = Standardliste.";
+                    break;
+            }
+        }
+
         private void LadeWerteAusConfig()
         {
             try
@@ -345,6 +397,8 @@
                                 ? config.ErlaubteAnhangEndungen
                                 : new List<string>(AppConfig.StandardAnhangEndungen));
                         _txtGesperrteEndungen.Text = string.Join(", ", config.GesperrteAnhangEndungen ?? new List<string>());
+                        _cmbAnhangFilter.SelectedIndex = config.IstAllesErlauben ? 2 : (config.IstAllesAusserBlacklist ? 1 : 0);
+                        _filterUrspruenglich = _cmbAnhangFilter.SelectedIndex;
                         _txtTageZurueck.Text = config.TAGE_ZURUECK.ToString();
                         _chkNurUngelesene.IsChecked = config.NUR_UNGELESENE;
                         _txtDelay.Text = config.DELAY_MILLISEKUNDEN.ToString();
@@ -437,6 +491,10 @@
                 .ToList();
             config.ErlaubteAnhangEndungen = endungen.Count > 0 ? endungen : new List<string>(AppConfig.StandardAnhangEndungen);
 
+            config.AnhangFilter = _cmbAnhangFilter.SelectedIndex == 2
+                ? AppConfig.FilterAllesErlauben
+                : (_cmbAnhangFilter.SelectedIndex == 1 ? AppConfig.FilterAllesAusserBlacklist : AppConfig.FilterNurWhitelist);
+
             // Sperrliste: leer bedeutet bewusst "keine zusätzliche Sperre"
             config.GesperrteAnhangEndungen = _txtGesperrteEndungen.Text
                 .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
@@ -526,6 +584,19 @@
                 if (config == null)
                 {
                     config = new AppConfig();
+                }
+
+                // Wer "Alles erlauben" neu aktiviert, bekommt eine Sicherheitsfrage
+                if (_cmbAnhangFilter.SelectedIndex == 2 && _filterUrspruenglich != 2)
+                {
+                    var antwort = MessageBox.Show(
+                        "Mit 'Alles erlauben' werden auch Programme (exe) und Skripte aus E-Mails gespeichert.\n\nDie App fragt beim Öffnen solcher Dateien zwar nach, aber sie liegen dann auf dem Rechner.\n\nWirklich so speichern?",
+                        "Alles erlauben?", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+
+                    if (antwort != MessageBoxResult.Yes)
+                    {
+                        return;
+                    }
                 }
 
                 UebertrageUiInConfig(config);

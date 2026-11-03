@@ -3,6 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         Title="E-Mail Manager - Chef-Ansicht" Height="750" Width="1250">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    </Window.Resources>
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="320"/>
@@ -23,7 +26,11 @@
 
             <!-- Kompakte E-Mail-Liste -->
             <ListView x:Name="EmailListView" Grid.Row="1" Margin="10,0,10,10" BorderBrush="#FFDDDDDD" 
-                      SelectionChanged="EmailListView_SelectionChanged" SelectionMode="Single">
+                      SelectionChanged="EmailListView_SelectionChanged" SelectionMode="Single"
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                      ScrollViewer.CanContentScroll="False"
+                      PreviewMouseWheel="EmailListView_PreviewMouseWheel"
+                      HorizontalContentAlignment="Stretch">
                 <ListView.ItemTemplate>
                     <DataTemplate>
                         <StackPanel Margin="4,8,4,8">
@@ -31,75 +38,97 @@
                             <TextBlock Text="{Binding SenderEmail}" FontSize="11" Foreground="#FF0066CC" TextTrimming="CharacterEllipsis" Margin="0,1,0,1"/>
                             <TextBlock Text="{Binding Subject}" FontSize="11" Foreground="#FF555555" TextTrimming="CharacterEllipsis" Margin="0,0,0,4"/>
 
-                            <!-- Blatt-Papier-Kacheln für gespeicherte Anhänge -->
-                            <ItemsControl ItemsSource="{Binding Attachments}" Margin="0,2,0,0">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <WrapPanel Orientation="Horizontal"/>
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Background="#FFFFFFFF" BorderBrush="#FFB0C4DE" BorderThickness="1.5" CornerRadius="4" Padding="6,6" Margin="0,0,6,6" 
-                                                Width="130" Height="48"
-                                                ToolTip="{Binding}" MouseLeftButtonDown="Attachment_MouseLeftButtonDown" Cursor="Hand">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                    <ColumnDefinition Width="*"/>
-                                                </Grid.ColumnDefinitions>
-                                                <!-- Dokument-Symbol -->
-                                                <TextBlock Text="📄" FontSize="18" Margin="0,0,6,0" VerticalAlignment="Center"/>
-
-                                                <!-- Dateiname mit Zeilenumbruch -->
-                                                <TextBlock Grid.Column="1" Text="{Binding}" FontSize="10" Foreground="#FF333333" FontWeight="SemiBold" 
-                                                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" MaxHeight="36"/>
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-
-                            <!-- Nicht gespeicherte (blockierte) Anhänge: rot und durchgestrichen, Grund im Tooltip -->
-                            <ItemsControl ItemsSource="{Binding BlockedAttachments}" Margin="0,0,0,0">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <WrapPanel Orientation="Horizontal"/>
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Background="#FFFDECEA" BorderBrush="#FFDC3545" BorderThickness="1.5" CornerRadius="4" Padding="6,6" Margin="0,0,6,6"
-                                                Width="130" Height="48"
-                                                ToolTip="{Binding Reason}">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                    <ColumnDefinition Width="*"/>
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Text="🚫" FontSize="18" Margin="0,0,6,0" VerticalAlignment="Center"/>
-
-                                                <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="10" Foreground="#FFDC3545" FontWeight="SemiBold"
-                                                           TextDecorations="Strikethrough"
-                                                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" MaxHeight="36"/>
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-
-                            <!-- Hinweis, welche E-Mail betroffen ist (nur sichtbar, wenn etwas nicht gespeichert wurde) -->
-                            <TextBlock Text="{Binding BlockedHinweis}" FontSize="10" FontWeight="SemiBold" Foreground="#FFDC3545" Margin="0,0,0,0">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
+                            <!-- Anhänge-Button -->
+                            <Button Click="BtnAnhaenge_Click" Margin="0,4,0,0" Padding="8,6" Cursor="Hand"
+                                    HorizontalContentAlignment="Stretch"
+                                    Background="#FFE8F0FA" BorderBrush="#FF7FA6D6" BorderThickness="1">
+                                <Button.Style>
+                                    <Style TargetType="Button">
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding BlockedHinweis}" Value="">
+                                            <DataTrigger Binding="{Binding HatAnhaenge}" Value="False">
                                                 <Setter Property="Visibility" Value="Collapsed"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
+                                </Button.Style>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding AnhangOkText}" FontSize="12" FontWeight="SemiBold" Foreground="#FF333333" Margin="0,0,12,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding AnhangOkText}" Value="">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding AnhangBlockedText}" FontSize="12" FontWeight="SemiBold" Foreground="#FFDC3545">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding AnhangBlockedText}" Value="">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="{Binding AufklappSymbol}" FontSize="12" Foreground="#FF333333" VerticalAlignment="Center"/>
+                                </Grid>
+                            </Button>
+
+                            <!-- Alle Anhänge untereinander (nur sichtbar, wenn aufgeklappt) -->
+                            <StackPanel Margin="2,4,0,0" Visibility="{Binding IstAufgeklappt, Converter={StaticResource BoolToVis}}">
+                                <!-- Gespeicherte Anhänge -->
+                                <ItemsControl ItemsSource="{Binding Attachments}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="#FFFFFFFF" BorderBrush="#FFB0C4DE" BorderThickness="1" CornerRadius="4" Padding="6,4" Margin="0,0,0,4"
+                                                    ToolTip="{Binding}" MouseLeftButtonDown="Attachment_MouseLeftButtonDown" Cursor="Hand">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="📄" FontSize="16" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Grid.Column="1" Text="{Binding}" FontSize="11" Foreground="#FF333333" FontWeight="SemiBold"
+                                                               TextWrapping="Wrap" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <!-- Nicht gespeicherte Anhänge -->
+                                <ItemsControl ItemsSource="{Binding BlockedAttachments}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="#FFFDECEA" BorderBrush="#FFDC3545" BorderThickness="1" CornerRadius="4" Padding="6,4" Margin="0,0,0,4"
+                                                    ToolTip="{Binding Reason}">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="🚫" FontSize="16" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Name}" FontSize="11" Foreground="#FFDC3545" FontWeight="SemiBold"
+                                                                   TextDecorations="Strikethrough" TextWrapping="Wrap"/>
+                                                        <TextBlock Text="{Binding Reason}" FontSize="10" Foreground="#FFB02A37" TextWrapping="Wrap"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
                         </StackPanel>
                     </DataTemplate>
                 </ListView.ItemTemplate>
@@ -121,7 +150,6 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <!-- Kopfzeile mit Betreff/Absender und rechts Einstellungen + Logs -->
                     <Grid Grid.Row="0" Margin="0,0,0,12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
@@ -133,9 +161,7 @@
                             <TextBlock x:Name="TxtSender" Text="Absender: -" FontSize="12" Foreground="#FF555555" TextWrapping="Wrap"/>
                         </StackPanel>
 
-                        <!-- Rechte obere Ecke: Ablegen (abseits der Aktionsbuttons) sowie Einstellungen & Logs -->
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
-                            <!-- Ablegen im Archiv-Ordner, bewusst von Einsortieren/Blockieren/Löschen getrennt -->
                             <Button x:Name="BtnArchive" Content="📦 Ablegen" Width="95" Height="30" Margin="0,0,24,0"
                                     Background="#FF17A2B8" Foreground="White" FontWeight="Bold" Click="BtnArchive_Click"/>
                             <Button x:Name="BtnSettings" Content="⚙️ Einstellungen" Width="110" Height="30" Margin="0,0,8,0"
@@ -145,7 +171,6 @@
                         </StackPanel>
                     </Grid>
 
-                    <!-- Eingabefelder: Auftragsnummer, Firma und Aktionsbuttons -->
                     <Grid Grid.Row="1">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="150"/>
@@ -153,19 +178,16 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
-                        <!-- Auftragsnummer -->
                         <StackPanel Grid.Column="0" Margin="0,0,10,0">
                             <TextBlock Text="Auftragsnummer:" FontSize="11" FontWeight="Bold" Foreground="#FF333333" Margin="0,0,0,2"/>
                             <TextBox x:Name="TxtOrderNumber" Height="28" VerticalContentAlignment="Center" Padding="4"/>
                         </StackPanel>
 
-                        <!-- Firmenordner Auswahl -->
                         <StackPanel Grid.Column="1" Margin="0,0,10,0">
                             <TextBlock Text="Firma / Ordner (Auto-Erkennung):" FontSize="11" FontWeight="Bold" Foreground="#FF333333" Margin="0,0,0,2"/>
                             <ComboBox x:Name="CmbCompany" IsEditable="True" Height="28" VerticalContentAlignment="Center"/>
                         </StackPanel>
 
-                        <!-- Buttons rechts (Einsortieren, Ablegen, Blockieren & Löschen) -->
                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom">
                             <Button x:Name="BtnAssign" Content="🚀 Einsortieren" Width="110" Height="28" Margin="0,0,6,0"
                                     Background="#FF28A745" Foreground="White" FontWeight="Bold" Click="BtnAssign_Click"/>
